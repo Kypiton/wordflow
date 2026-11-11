@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client"
+  output = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model TelegramUser {
+  id        BigInt         @id
+  createdAt DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @db.Timestamptz(3)
+  sessions  StudySession[]
+}
+
+// Published word versions are immutable, so existing attempts keep their meaning.
+model Word {
+  id           String        @id @default(uuid()) @db.Uuid
+  slug         String        @db.VarChar(80)
+  version      Int           @default(1)
+  term         String        @db.VarChar(80)
+  partOfSpeech String        @db.VarChar(40)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
+  options      WordOption[]
+  items        SessionItem[]
+
+  @@unique([slug, version])
+}
+
+model WordOption {
+  id        String   @id @default(uuid()) @db.Uuid
+  wordId    String   @db.Uuid
+  position  Int
+  text      String   @db.VarChar(80)
+  isCorrect Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  word      Word     @relation(fields: [wordId], references: [id], onDelete: Restrict)
+
+  @@unique([wordId, position])
+  @@unique([wordId, text])
+}
+
+model StudySession {
+  id           String         @id @db.VarChar(24)
+  userId       BigInt
+  chatId       BigInt
+  messageId    BigInt?
+  chatInstance String?        @db.VarChar(256)
+  expiresAt    DateTime       @db.Timestamptz(3)
+  revokedAt    DateTime?      @db.Timestamptz(3)
+  createdAt    DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime       @updatedAt @db.Timestamptz(3)
+  user         TelegramUser   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items        SessionItem[]
+  receipts     WidgetQueryReceipt[]
+
+  @@unique([chatId, messageId])
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+model SessionItem {
+  id         String         @id @default(uuid()) @db.Uuid
+  sessionId  String         @db.VarChar(24)
+  wordId     String         @db.Uuid
+  position   Int
+  revealedAt DateTime?      @db.Timestamptz(3)
+  createdAt  DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime       @updatedAt @db.Timestamptz(3)
+  session    StudySession   @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  word       Word           @relation(fields: [wordId], references: [id], onDelete: Restrict)
+  attempt    ReviewAttempt?
+
+  @@unique([sessionId, position])
+  @@unique([sessionId, wordId])
+  @@index([wordId])
+}
+
+model ReviewAttempt {
+  id               String      @id @default(uuid()) @db.Uuid
+  sessionItemId    String      @unique @db.Uuid
+  // Null means the answer was revealed before a selection; never awards progress.
+  selectedPosition Int?
+  correct          Boolean
+  createdAt        DateTime    @default(now()) @db.Timestamptz(3)
+  item             SessionItem @relation(fields: [sessionItemId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+}
+
+model WidgetQueryReceipt {
+  id          String       @id @db.VarChar(256)
+  sessionId   String       @db.VarChar(24)
+  fingerprint String       @db.Char(64)
+  response    Json
+  deliveredAt DateTime?    @db.Timestamptz(3)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  session     StudySession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  @@index([sessionId])
+  @@index([createdAt])
+}

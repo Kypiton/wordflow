@@ -1,138 +1,50 @@
 import "server-only";
 
-import { createHash, randomBytes } from "node:crypto";
 import { answerWidgetQuery, sendWidget } from "./client";
 import { quizWidgetHtml } from "./quiz-widget";
 import { isPrivateWidgetQuery, isQueryId, isRecord } from "./types";
-import type { PrivateWidgetQuery } from "./types";
+import { PrismaQuizRepository } from "../db/quiz-repository";
+import { invalidQuiz } from "./quiz-domain";
+import type { QueryResult, QuizRepository } from "../db/quiz-repository";
 
-const SESSION_TTL_MS = 30 * 60_000;
-const MAX_SESSIONS = 1000;
-const CORRECT_INDEX = 2;
-const CORRECT_ANSWER = "Неохотный";
-
-type Feedback = {
-  status: "answered" | "revealed";
-  selected: number | null;
-  correct: boolean;
-  correctIndex?: number;
-  answer?: string;
-} | { status: "error" | "expired"; message: string };
-
-type Session = {
-  userId: number;
-  chatId: number;
-  messageId?: number;
-  chatInstance?: string;
-  expiresAt: number;
-  selected?: number;
-  revealed: boolean;
-};
-
-const invalid = (): Feedback => ({ status: "error", message: "Неверный запрос. Отправьте /learn для нового задания." });
-
-/** One process only. Unknown/expired sessions fail closed; no client state is trusted. */
-export class QuizStore {
-  private sessions = new Map<string, Session>();
-
-  constructor(private now: () => number = Date.now, private limit = MAX_SESSIONS) {}
-
-  create(userId: number, chatId: number): string {
-    for (const [id, session] of this.sessions) {
-      if (session.expiresAt <= this.now()) this.sessions.delete(id);
-    }
-    if (this.sessions.size >= this.limit) throw new Error("Quiz capacity reached.");
-    const id = randomBytes(12).toString("hex");
-    this.sessions.set(id, { userId, chatId, expiresAt: this.now() + SESSION_TTL_MS, revealed: false });
-    return id;
-  }
-
-  bind(id: string, messageId: number): void {
-    const session = this.sessions.get(id);
-    if (session) session.messageId = messageId;
-  }
-
-  remove(id: string): void { this.sessions.delete(id); }
-
-  process(query: PrivateWidgetQuery): Feedback {
-    const match = /^q:([a-f0-9]{24}):(a[0-3]|r)$/.exec(query.data);
-    if (!match) return invalid();
-    const session = this.sessions.get(match[1]);
-    if (!session || session.expiresAt <= this.now()) {
-      this.sessions.delete(match[1]);
-      return { status: "expired", message: "Задание истекло. Отправьте /learn и начните снова." };
-    }
-    if (session.userId !== query.from.id || session.chatId !== query.chat.id ||
-        session.messageId !== query.message_id ||
-        (session.chatInstance !== undefined && session.chatInstance !== query.chat_instance)) return invalid();
-    session.chatInstance = query.chat_instance;
-    // Synchronous mutation before any await: first answer wins, including concurrent
-    // taps, changed choices, and retries after ambiguous answerWidgetQuery failures.
-    if (match[2] === "r") session.revealed = true;
-    else if (session.selected === undefined && !session.revealed) session.selected = Number(match[2][1]);
-    return {
-      status: session.revealed ? "revealed" : "answered",
-      selected: session.selected ?? null,
-      correct: session.selected === CORRECT_INDEX,
-      ...(session.revealed ? { correctIndex: CORRECT_INDEX, answer: CORRECT_ANSWER } : {}),
-    };
-  }
-}
-
-export const quizStore = new QuizStore();
+// The repository is stateless. Only the database holds sessions and receipts.
+export const quizStore: QuizRepository = new PrismaQuizRepository();
 
 export async function sendQuiz(userId: number, chatId: number): Promise<void> {
-  const id = quizStore.create(userId, chatId);
+  const { id, content } = await quizStore.create(userId, chatId);
   try {
     const message = await sendWidget({
-      chat_id: chatId,
-      html: quizWidgetHtml(id),
-      allow_queries: true,
+      chat_id: chatId, html: quizWidgetHtml(id, content), allow_queries: true,
       caption: "WordFlow · Your daily word",
     });
     if (message.chat.id !== chatId || message.chat.type !== "private" || message.message_id <= 0) {
       throw new Error("Invalid widget response.");
     }
-    quizStore.bind(id, message.message_id);
+    await quizStore.bind(id, message.message_id);
   } catch {
-    quizStore.remove(id);
+    // A sent-but-unbound card can never accept answers. Revocation is best effort.
+    try { await quizStore.revoke(id); } catch { /* Fail closed on unbound sessions. */ }
     throw new Error("Unable to send quiz.");
   }
 }
 
-type Receipt = { fingerprint: string; expiresAt: number; delivery: Promise<void> };
-const receipts = new Map<string, Receipt>();
-
 export async function handleWidgetQuery(value: unknown): Promise<boolean> {
   if (!isRecord(value) || !isQueryId(value.id)) return false;
-  const queryId = value.id;
-  const now = Date.now();
-  for (const [id, receipt] of receipts) {
-    if (receipt.expiresAt <= now) receipts.delete(id);
+  let result: QueryResult = { feedback: invalidQuiz() };
+  if (isPrivateWidgetQuery(value)) {
+    try {
+      result = await quizStore.process(value);
+    } catch {
+      // Still answer within the deadline; do not expose DB errors or credentials.
+      result = { feedback: { status: "error", retryable: true, message: "Не удалось проверить. Нажмите ещё раз." } };
+    }
   }
-  const fingerprint = createHash("sha256").update(JSON.stringify(value)).digest("hex");
-  const previous = receipts.get(queryId);
-  if (previous) {
-    // Reusing a query id with different data/context must never change the quiz.
-    if (previous.fingerprint !== fingerprint) return false;
-    await previous.delivery;
-    return true;
-  }
-  if (receipts.size >= 2000) {
-    await answerWidgetQuery({ widget_query_id: queryId, data: JSON.stringify(invalid()) });
-    return true;
-  }
-  const delivery = Promise.resolve().then(async () => {
-    const feedback = isPrivateWidgetQuery(value) ? quizStore.process(value) : invalid();
-    await answerWidgetQuery({ widget_query_id: queryId, data: JSON.stringify(feedback) });
-  });
-  receipts.set(queryId, { fingerprint, expiresAt: now + 60_000, delivery });
-  try {
-    await delivery;
-  } catch {
-    // Permit delivery retry; the committed selection remains immutable.
-    receipts.delete(queryId);
-    throw new Error("Unable to answer widget query.");
+  if (result.delivered) return true;
+  await answerWidgetQuery({ widget_query_id: value.id, data: JSON.stringify(result.feedback) });
+  if (result.receiptId) {
+    // Delivery acknowledgement is separate from grading. An ambiguous API failure
+    // can resend the same result but can never insert another review attempt.
+    try { await quizStore.delivered(result.receiptId); } catch { /* Safe to redeliver. */ }
   }
   return true;
 }

@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test } from "node:test";
+import { afterEach, beforeEach, test, mock } from "node:test";
 import { randomBytes } from "node:crypto";
 import { deflateSync } from "node:zlib";
 import { runInNewContext } from "node:vm";
 import { POST } from "../.next/telegram-tests/app/api/telegram/webhook/route.js";
 import { sendWidget, answerWidgetQuery } from "../.next/telegram-tests/lib/telegram/client.js";
-import { QuizStore, quizStore } from "../.next/telegram-tests/lib/telegram/quiz.js";
+import { quizStore } from "../.next/telegram-tests/lib/telegram/quiz.js";
 import { quizWidgetHtml } from "../.next/telegram-tests/lib/telegram/quiz-widget.js";
 import { isPrivateWidgetQuery } from "../.next/telegram-tests/lib/telegram/types.js";
 
+import { FakeQuizRepository, initialContent } from "./quiz-fixture.mjs";
+
+let fake;
 const originalFetch = globalThis.fetch;
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 const originalSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -16,6 +19,10 @@ const token = "1234:widget_test_token";
 let calls;
 let nextId = 500;
 beforeEach(() => {
+  fake = new FakeQuizRepository();
+  for (const method of ["create", "bind", "revoke", "process", "delivered"]) {
+    mock.method(quizStore, method, (...args) => fake[method](...args));
+  }
   process.env.TELEGRAM_BOT_TOKEN = token;
   process.env.TELEGRAM_WEBHOOK_SECRET = "test_secret";
   calls = [];
@@ -26,6 +33,7 @@ beforeEach(() => {
   };
 });
 afterEach(() => {
+  mock.restoreAll();
   globalThis.fetch = originalFetch;
   for (const [key, value] of [["TELEGRAM_BOT_TOKEN", originalToken], ["TELEGRAM_WEBHOOK_SECRET", originalSecret]]) {
     if (value === undefined) delete process.env[key];
@@ -44,8 +52,8 @@ const query = (session, action = "a2", changes = {}) => ({
   type: { type: "data" }, data: `q:${session}:${action}`, ...changes,
 });
 const postQuery = value => post({ update_id: 12, widget_query: value });
-const createSession = (store = quizStore) => {
-  const id = store.create(42, 42); store.bind(id, 900); return id;
+const createSession = (store = fake) => {
+  const { id } = store.create(42, 42); store.bind(id, 900); return id;
 };
 const lastAnswer = () => JSON.parse(calls.at(-1).body.data);
 
@@ -86,16 +94,17 @@ test("correct, incorrect, and reveal requests return feedback inside API data", 
     assert.deepEqual(lastAnswer(), { status: "revealed", selected: choice, correct, correctIndex: 2, answer: "Неохотный" });
   }
 });
-test("duplicate and simultaneous queries deliver once, and changed choices never regrade", async () => {
+test("duplicate and simultaneous queries preserve one attempt; changed choices never regrade", async () => {
   const id = createSession(); const first = query(id, "a0");
   const responses = await Promise.all([postQuery(first), postQuery(first), postQuery(query(id, "a2"))]);
   assert.ok(responses.every(response => response.status === 200));
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   for (const call of calls) assert.equal(JSON.parse(call.body.data).selected, 0);
   assert.equal((await postQuery(first)).status, 200);
-  assert.equal(calls.length, 2);
-  assert.equal((await postQuery({ ...first, data: `q:${id}:a2` })).status, 400);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
+  assert.equal((await postQuery({ ...first, data: `q:${id}:a2` })).status, 200);
+  assert.equal(lastAnswer().status, "error");
+  assert.equal(fake.sessions.get(id).attempt.selectedPosition, 0);
 });
 test("revealing before answering ends the attempt without awarding a correct answer", async () => {
   const id = createSession();
@@ -150,16 +159,6 @@ test("a stalled webhook body is cancelled before the widget response deadline", 
   assert.ok(Date.now() - started < 5000);
   assert.equal(calls.length, 0);
 });
-test("session expiry, restart, and bounded capacity fail closed", () => {
-  let now = 0;
-  const store = new QuizStore(() => now, 1);
-  const id = createSession(store);
-  assert.throws(() => store.create(42, 42), /capacity/);
-  now = 30 * 60_000;
-  assert.equal(store.process(query(id)).status, "expired");
-  assert.equal(new QuizStore().process(query(id)).status, "expired");
-  assert.equal(store.process(query(createSession(store))).correct, true);
-});
 test("answer transport failure permits delivery retry while preserving the first choice", async () => {
   const id = createSession(); const first = query(id, "a0");
   const successFetch = globalThis.fetch;
@@ -213,22 +212,22 @@ function widgetHarness(bridge) {
   });
   const buttons = [0, 1, 2, 3].map(i => element(String(i)));
   const feedback = element(); const reveal = element();
-  const html = quizWidgetHtml("a".repeat(24));
+  const html = quizWidgetHtml("a".repeat(24), initialContent);
   runInNewContext(html.match(/<script>([\s\S]*)<\/script>/)[1], {
     window: { TelegramWidget: bridge },
-    document: { querySelectorAll: () => buttons, getElementById: id => id === "feedback" ? feedback : reveal },
+    document: { querySelector: () => ({ textContent: "Reluctant" }), querySelectorAll: () => buttons, getElementById: id => id === "feedback" ? feedback : reveal },
   });
   return { buttons, feedback, reveal, html };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 test("HTML stays well below limits and contains no network access, secrets or answer key", () => {
-  const html = quizWidgetHtml("a".repeat(24));
+  const html = quizWidgetHtml("a".repeat(24), initialContent);
   assert.ok(Buffer.byteLength(html) < 32768);
   assert.ok(deflateSync(html, { level: 9 }).length < 3800);
   assert.ok(!html.includes(token));
   const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
   assert.doesNotMatch(script, /CORRECT|Неохотный|fetch\(|XMLHttpRequest|location|https:\/\//);
-  assert.throws(() => quizWidgetHtml('</script>'));
+  assert.throws(() => quizWidgetHtml('</script>', initialContent));
 });
 test("click calls bridge synchronously, locks pending taps, and renders server feedback/reveal", async () => {
   let resolve; const requests = [];
@@ -257,6 +256,7 @@ test("widget handles correct, expired, malformed, rate-limited and synchronous f
   for (const [reply, text, locked] of [
     [{ status: "answered", selected: 2, correct: true }, /Верно/, true],
     [{ status: "expired", message: "Send /learn" }, /Send \/learn/, true],
+    [{ status: "error", retryable: true, message: "Try again" }, /Try again/, false],
     [null, /Не удалось/, false],
   ]) {
     const ui = widgetHarness({ viewer: {}, ready() {}, request: () => Promise.resolve({ result: JSON.stringify(reply) }) });
@@ -272,4 +272,26 @@ test("widget handles correct, expired, malformed, rate-limited and synchronous f
   }
   const preview = widgetHarness(undefined);
   assert.ok(preview.buttons.every(b => b.disabled));
+});
+
+test("database failures return safe retryable feedback without recording an answer", async () => {
+  mock.method(quizStore, "process", async () => { throw new Error("postgresql://secret-credentials"); });
+  assert.equal((await postQuery(query(createSession()))).status, 200);
+  assert.equal(lastAnswer().retryable, true);
+  assert.ok(!JSON.stringify(lastAnswer()).includes("secret-credentials"));
+});
+test("quiz send or binding failures revoke the session; missing seed/database is safe", async () => {
+  mock.method(quizStore, "bind", async () => { throw new Error("db credentials"); });
+  assert.equal((await post(learn())).status, 502);
+  assert.equal([...fake.sessions.values()][0].revoked, true);
+  mock.method(quizStore, "create", async () => { throw new Error("no seed"); });
+  const response = await post(learn());
+  assert.equal(response.status, 502);
+  assert.ok(!(await response.text()).includes("no seed"));
+});
+test("database text is escaped in widget markup and reveal uses the displayed word", () => {
+  const html = quizWidgetHtml("a".repeat(24), { ...initialContent, term: "<script>bad</script>", options: ["<&", "two", "three", "four"] });
+  assert.match(html, /&lt;script&gt;bad/);
+  assert.match(html, /&lt;&amp;/);
+  assert.throws(() => quizWidgetHtml("a".repeat(24), { ...initialContent, options: [] }));
 });

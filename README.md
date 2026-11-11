@@ -1,85 +1,132 @@
 # WordFlow
 
-A Telegram-first English vocabulary learning app built with Next.js App Router and TypeScript. Supports `/start` onboarding and `/learn`, a real Bot API 10.4 HTML vocabulary quiz inside a private Telegram chat. No database, authentication system, Mini App, AI, or widget dependencies are used.
+Telegram-first English vocabulary practice using Next.js App Router, TypeScript, Bot API 10.4 HTML widgets, and PostgreSQL/Prisma. `/start` welcomes the learner; `/learn` sends the lavender **Reluctant** quiz. Answers and reveals stay inside the widget. The correct translation is **Неохотный**.
 
-## Onboarding and setup
+## First setup — a database must be provisioned
 
-Use Node.js 22.9+ and npm.
+**No PostgreSQL database is bundled or provisioned. No migration or seed has been applied to a database.** Code generation and unit tests work offline; `/learn` requires the database and seed below. `/start` does not access the database.
+
+1. Use **Node.js 24.x**, matching `package.json` and Vercel's Node runtime. Prisma CLI, client, and PostgreSQL adapter are pinned together at **7.10.1**; `pg` is **8.23.1**. PostgreSQL **16 or newer** is recommended for a new database.
+2. Provision PostgreSQL with your chosen provider (for example, a Vercel-connected PostgreSQL service). Choose a region near the Vercel function. Obtain the provider-issued connection strings; do not use the placeholder credentials below.
+3. Install dependencies and prepare local configuration:
+
+   ```bash
+   npm install
+   cp -n .env.example .env.local
+   ```
+
+   Preserve an existing `.env.local`. Set:
+
+   - `DATABASE_URL`: provider-issued PostgreSQL URL. Use the provider's pooled endpoint for Vercel/serverless traffic, with its required TLS parameters.
+   - `DIRECT_URL`: optional provider-issued direct connection for migration/seed administration when the runtime URL uses a pooler. Otherwise leave empty; commands use `DATABASE_URL`.
+   - `TELEGRAM_BOT_TOKEN`: the bot token from [@BotFather](https://t.me/BotFather).
+   - `TELEGRAM_WEBHOOK_SECRET`: generate with `openssl rand -hex 32`; use the same value on the app and webhook registration.
+   - `TELEGRAM_WEBHOOK_URL`: public HTTPS URL ending in `/api/telegram/webhook`.
+
+   `.env.local` remains ignored by Git. Never use `NEXT_PUBLIC_` for these values. Prisma CLI loads `.env.local` without overwriting exported shell variables. Next.js loads it normally; no new dotenv package is needed.
+
+4. After configuring the real database URL, apply the reviewed, additive initial migration and seed:
+
+   ```bash
+   npm run db:generate
+   npm run db:validate
+   npm run db:migrate
+   npm run db:seed
+   ```
+
+   `db:migrate` runs **`prisma migrate deploy`**, applying committed migrations only. It does not reset a database. The initial SQL creates tables, constraints, and indexes; inspect `prisma/migrations/20261111000000_initial_storage/migration.sql` before applying it to an existing database. Use a fresh application database/schema to avoid table-name collisions. Do not use `migrate reset` or `db push` against production.
+
+   `db:seed` compiles and runs an explicit idempotent seed. It creates `reluctant` version 1 and its four options once. Reruns preserve their IDs and content and never modify user progress. Generation, install, builds, and application startup do **not** migrate or seed.
+
+5. Run locally with `npm run dev`. For Telegram delivery use a public HTTPS tunnel or a deployed endpoint, then run:
+
+   ```bash
+   npm run telegram:webhook
+   ```
+
+   Registration enables `message` and `widget_query`, preserves pending updates, and rejects local/IP URLs. It changes the bot's webhook, so use a separate development bot if production must keep receiving updates. In a compatible Telegram client, send `/start`, then `/learn` in a private chat.
+
+## Vercel deployment
+
+1. Select **Node.js 24.x** in Project Settings. Keep the webhook on the Node.js runtime; it is not an Edge function.
+2. Add `DATABASE_URL`, the bot token, webhook secret, and public webhook URL to Vercel's **Production** environment. Use a connection pooler compatible with PostgreSQL transactions. `DIRECT_URL` is needed only where administrative commands run, not by the webhook.
+3. Give Preview deployments their **own database and bot**; do not point them at production credentials. Vercel environment variables are available without `.env.local`.
+4. From a trusted machine/CI with the target database's credentials, run `npm run db:migrate` and `npm run db:seed` explicitly before enabling the deployment. Keep these commands outside the automatic Vercel build to prevent previews from changing a production database.
+5. Deploy with the default `npm run build`. `postinstall` and the build regenerate Prisma Client, including when Vercel caches dependencies. Generation does not require a live database. If using a custom install command, retain dev dependencies so the pinned Prisma CLI is available during build.
+6. Register the public webhook again with `npm run telegram:webhook`, then perform the manual smoke test below. Ensure `/api/telegram/webhook` is publicly reachable without a deployment login.
+
+Each warm function caches only a lazy Prisma client/connection pool (maximum two connections, short connection/query timeouts). **All quiz state is in PostgreSQL**, so sessions survive cold starts and deploys and can be handled by different Vercel instances. Do not disconnect Prisma after every request. Use provider pooling and monitor connection capacity as traffic grows. See [Prisma's Vercel guide](https://www.prisma.io/docs/orm/v7/prisma-client/deployment/serverless/deploy-to-vercel).
+
+## Data and session lifecycle
+
+The normalized schema contains:
+
+| Model | Purpose and constraints |
+| --- | --- |
+| `TelegramUser` | Telegram numeric ID stored as PostgreSQL `BIGINT`; owns sessions. |
+| `Word` | Immutable published word version, unique `(slug, version)`. |
+| `WordOption` | Four ordered translations, unique word/position and word/text; a partial unique SQL index allows at most one correct option. Creation checks require exactly four options and one correct answer. |
+| `StudySession` | Random 24-character token; owner, private chat, widget message and chat-instance binding; expiration, revocation, and timestamps. Unique chat/message; owner/date and expiration indexes. |
+| `SessionItem` | Ordered session-to-word relation, unique session/position and session/word; reveal timestamp. |
+| `ReviewAttempt` | Immutable first selection, or null selection for reveal-first. **Unique session item** guarantees at most one recorded outcome. `correct` records the outcome; reveal-first cannot award credit. |
+| `WidgetQueryReceipt` | Unique Telegram query ID, canonical request fingerprint, stored result, and delivery timestamp. Enables retry/replay handling across instances. |
+
+`/learn` creates the user if needed, a 30-minute session, and its first item in one transaction, then sends the real HTML widget with `allow_queries: true`. The returned Telegram message ID activates the session. A send/bind failure triggers best-effort revocation; an unbound card cannot accept answers. There is no external transaction covering Telegram and PostgreSQL: an ambiguous send can leave an unusable card, and duplicate `/learn` updates can create separate sessions. Send `/learn` again in that case.
+
+Widget queries still require the secret header and a private, non-bot Telegram sender. The repository independently validates input, then checks owner, chat, message, chat instance, expiry using database time, and revocation. Unknown Task #2 in-memory cards cannot be recovered; send `/learn` after upgrading.
+
+A short **READ COMMITTED transaction locks the session row with `SELECT … FOR UPDATE`**. It creates the attempt (only if absent), marks reveal state, and stores the query receipt atomically. Concurrent answers and reveal/answer races serialize across instances; the unique attempt constraint is a second safeguard. Different answer choices return the original result. Reusing a query ID with changed context/data is rejected. Progress is derived from review attempts, with no separate incrementing counter that can be awarded twice.
+
+The database transaction commits **before** `answerWidgetQuery`. If Telegram delivery fails, replay uses the saved result without grading again. Delivery marking is best effort: simultaneous delivery or a crash can resend an API answer, but cannot insert another attempt. Expired/revoked sessions remain in the database for history and reject further grading; no destructive cleanup job runs automatically.
+
+The API uses a five-second answer timeout; database transactions have a one-second acquisition/lock budget and a 3.5-second execution timeout. Webhook body reading is capped at two seconds/64 KiB. Database outages return a safe retryable message within the widget when Telegram is reachable. Cold starts, network outages, or late webhook delivery can still exceed Telegram's 15-second deadline; monitor latency in production.
+
+The lavender HTML, synchronous click requests, selected-answer feedback, and reveal UI are preserved. Public word text comes from PostgreSQL and is HTML-escaped; answer flags, credentials, and grading logic never enter the widget. Published words should not be edited in place: create a new version for changed content. The models support multiple session items/words; current `/learn` intentionally selects `reluctant` version 1 and displays one item.
+
+## Verification
+
+Offline checks (no database credentials required):
 
 ```bash
-npm install
-cp -n .env.example .env.local
-```
-
-Keep an existing `.env.local`; fill in its placeholders locally:
-
-- `TELEGRAM_BOT_TOKEN`: create a bot with Telegram's [@BotFather](https://t.me/BotFather) and copy its token.
-- `TELEGRAM_WEBHOOK_SECRET`: generate a secret with `openssl rand -hex 32`. Use the same value on the deployed app and when registering the webhook.
-- `TELEGRAM_WEBHOOK_URL`: the full public HTTPS URL, for example `https://wordflow.your-domain.com/api/telegram/webhook`.
-
-These are server secrets: never use a `NEXT_PUBLIC_` prefix, commit them, or paste tokens into URLs in a browser. `.env.local` remains ignored; `.env.example` contains placeholders only.
-
-```bash
-npm run dev
-```
-
-The app runs at `http://localhost:3000`. Telegram cannot deliver public webhooks to localhost. Deploy the app to an HTTPS host, or use a public HTTPS tunnel pointing to port 3000. Configure the same environment variables on the host, and make sure the webhook route is reachable without a deployment login.
-
-Once the public endpoint is running, register it:
-
-```bash
-npm run telegram:webhook
-```
-
-The script loads `.env.local` (existing shell environment variables take precedence), validates configuration, and calls Telegram's [`setWebhook`](https://core.telegram.org/bots/api#setwebhook). It rejects localhost, local hostnames, IP literals, and non-HTTPS URLs. Use a publicly resolvable domain. Registration replaces the bot's existing webhook, subscribes to `message` and `widget_query` updates, and preserves pending updates. Re-run it after changing the public URL or webhook secret. Registration is an explicit setup step; builds and app startup never register it automatically.
-
-Open your bot in Telegram and send `/start` in a private chat. You should receive the WordFlow welcome message. `/start` with a deep-link argument or `@bot_username` suffix is supported. Send `/learn` to open the quiz. Other commands, non-text messages, and group chats are acknowledged without a reply.
-
-## Interactive vocabulary quiz
-
-After deploying Task #2, **run `npm run telegram:webhook` again** to enable `widget_query` updates. Use a Telegram client with HTML widget support. Send `/learn` in your private chat with the bot; it calls [`sendWidget`](https://core.telegram.org/bots/api#sendwidget) with inline HTML and `allow_queries: true`.
-
-The lavender card asks for the Russian translation of **Reluctant**. Tap one of four options to receive server-validated correct/incorrect feedback inside the same card. **Неохотный** is correct. “Показать ответ” asks the server to reveal the answer; revealing first closes the attempt without recording a correct selection. Send `/learn` for another attempt.
-
-The widget calls `TelegramWidget.request()` synchronously from the click handler. It disables controls while awaiting a response, renders the `result` returned by [`answerWidgetQuery`](https://core.telegram.org/bots/api#answerwidgetquery), and displays failures with a manual retry. It uses no external assets, network APIs, navigation, or client-side grading. Dark mode, narrow layouts, rounded touch targets, and a caption below the card keep controls clear of Telegram's timestamp.
-
-### State and request safety
-
-Run this task on **one long-running Node.js instance**. Up to 1,000 quiz sessions live in memory for 30 minutes. Sessions bind an opaque random identifier to the Telegram sender, private chat, and returned widget message ID; the first valid request also binds the chat instance. Only data queries from that original context are accepted. Inline/shared widgets, bot users, mismatched identities, malformed actions, and oversized input are rejected with safe feedback where a usable query ID exists.
-
-The first selection is committed synchronously before network I/O. Repeated answers, changed choices, and simultaneous queries return that original outcome. A bounded 60-second receipt cache coalesces duplicate query IDs; changed payloads reusing an ID are rejected. Failed answer delivery may be retried without grading again. Reveals are idempotent. No score, reward, or other external side effect is recorded.
-
-This is deliberately **not distributed or durable storage**: restarts, redeployments, and expiry make old cards return an expiry message. Multiple workers/serverless instances can reject sessions created by another worker. They cannot reconstruct or regrade an unknown session. Reopening a card resets its local display; the next tap retrieves the retained server outcome. Shared durable state is needed before scaling beyond one process. `/start` and `/learn` sends themselves remain subject to duplicate Telegram delivery after an ambiguous send timeout.
-
-Webhook authentication still uses the secret header and constant-time digest comparison. Bodies are limited to 64 KiB and two seconds of reading. Query validation is local and `answerWidgetQuery` runs immediately with a five-second network timeout and no automatic retries, leaving headroom for Telegram's 15-second deadline. Network outages or delayed webhook delivery can still cause Telegram timeouts.
-
-The [official widget limits](https://core.telegram.org/bots/widgets) are enforced: HTML ≤32,768 UTF-8 bytes, zlib level 9 ≤4,096 bytes, requests 1–64 bytes, and answers ≤1,024 bytes. This quiz measures 4,751 HTML bytes and about 2.2 KB using Python zlib level 9 (compression varies slightly with the session identifier); its action payloads are 28–29 bytes. Tests enforce limits on generated output as well as API inputs.
-
-## Implementation and verification
-
-- `src/lib/telegram/client.ts`: server-only, native-fetch Bot API client with typed inputs, runtime-validated responses, a timeout, and sanitized errors.
-- `src/lib/telegram/types.ts`: minimal message/update types and validators. Unknown fields and update types are tolerated.
-- `src/lib/telegram/webhook.ts`: bounded update reading, constant-time secret comparison, command selection, and welcome text.
-- `src/lib/telegram/quiz-widget.ts`: compact HTML/CSS/vanilla JS presentation.
-- `src/lib/telegram/quiz.ts`: session context, authoritative grading, reveal, and duplicate-query handling.
-- `src/app/api/telegram/webhook/route.ts`: Node.js POST route; validates the secret before parsing updates.
-- `scripts/register-telegram-webhook.mjs`: explicit registration with secret and `allowed_updates` settings.
-
-The route returns `401` for a missing/incorrect secret, `400` for malformed updates, `503` for missing/invalid server secret configuration, and `502` if a Telegram API call fails. Invalid quiz senders or query envelopes also return `400`. Invalid query actions/context with a usable query ID receive safe error feedback through `answerWidgetQuery`. Successful or unsupported updates return `200`. Delivery is awaited so failures can be retried by Telegram. Query answer deduplication has the process-local scope described above.
-
-```bash
+npm run db:generate
+npm run db:validate
 npm run test:telegram
 npm run lint
 npm run typecheck
 npm run build
 ```
 
-Tests mock Telegram fetch requests and use fake credentials; they do not register a webhook or send real messages. The 26 tests cover `/start` regression, widget API payloads and limits, `/learn`, sender/context validation, correct/wrong/reveal outcomes, concurrent duplicates, changed answers, expiry/capacity, sanitized failures, delivery retries, stalled request bodies, and synchronous click behavior using the actual widget script in a DOM/bridge harness.
+The 31 Telegram/unit tests pass using fake credentials, mocked Telegram fetch calls, and an explicit repository test double. They test `/start`, `/learn`, UI behavior, byte/compression limits, input validation, safe database/API errors, delivery retries, and escaping. Prisma generation/schema validation, lint, and TypeScript checks also pass. **These tests do not establish real PostgreSQL concurrency or persistence.**
 
-Manual Telegram smoke test after deployment: send `/start`, then `/learn`; choose a wrong answer and reveal it; open a new quiz and choose “Неохотный”; tap rapidly and reopen a card; verify that feedback stays inside the widget. Automated tests mock Telegram and cannot verify native Telegram rendering or live delivery.
+### Opt-in PostgreSQL integration suite
 
-### Task #2 verification environment
+1. Provision a **dedicated disposable test database**, separate from production, and apply the same committed migration to it. For example, in a shell where `TEST_DATABASE_URL` holds that provider-issued URL:
 
-Tests, lint, and TypeScript checks pass. The 320px layout was visually checked in local headless Chrome with a mock Telegram bridge; production HTML contains no mock bridge. Live Telegram delivery still needs the deployment smoke test above.
+   ```bash
+   DATABASE_URL="$TEST_DATABASE_URL" DIRECT_URL="$TEST_DATABASE_URL" npm run db:migrate
+   ```
 
-`npm run build` was attempted normally and with elevated permission. Both hit the existing Turbopack CSS-worker restriction: `binding to a port: Operation not permitted` while processing `src/app/globals.css`. This environment cannot complete the production build; rerun it on a host that permits Turbopack's local worker ports. The app's build configuration has not been changed to mask the failure.
+2. Set `TEST_DATABASE_URL` in `.env.local` or export it, then explicitly enable writes:
+
+   ```bash
+   WORDFLOW_DB_TESTS=1 npm run test:db
+   ```
+
+   The test runner never falls back to `DATABASE_URL`, never provisions/resets/migrates a database, and skips without both the test URL and opt-in flag. It creates the idempotent seed and random test-owned user/session records, then deletes only records belonging to that test user. The shared seed is retained.
+
+   Tests exercise separate/fresh clients, persistence, concurrent duplicates, authorization, expiry, revocation, unbound cards, reveal semantics, receipt conflicts, unique constraints, and rollback after an injected write failure. Database integration remains **unverified until this suite runs against your provisioned database**.
+
+Manual Telegram smoke test: `/start`; `/learn`; choose a wrong answer and reveal; create another quiz and choose “Неохотный”; tap repeatedly; redeploy/restart and answer a still-active card. Confirm the same stored outcome and at most one `ReviewAttempt` per item. Live Telegram delivery is not part of mocked tests.
+
+### Build environment limitation
+
+Task #3 reproduced the existing local restriction while Turbopack compiled the starter CSS: `binding to a port: Operation not permitted`, both normally and after a permission retry. Prisma generation completes; a generated-client import-resolution issue found during validation was fixed in the generator configuration. The production build still requires Vercel or a host permitting Turbopack worker ports. No build configuration workaround or database migration is hidden in the build command.
+
+## Files
+
+- `prisma/schema.prisma`, `prisma/migrations/`: models and reviewed initial SQL.
+- `prisma.config.ts`, `prisma/seed.ts`, `tsconfig.database.json`: configuration and explicit seed/tool compilation.
+- `src/lib/db/prisma.ts`, `quiz-repository.ts`: lazy connections and atomic storage.
+- `src/lib/telegram/quiz-domain.ts`, `quiz.ts`, `quiz-widget.ts`: validation/feedback, orchestration, and the widget presentation.
+- `src/app/api/telegram/webhook/route.ts`: existing Node.js webhook; `/start` stays independent of database availability.
+- `tests/widget.test.mjs`, `quiz-fixture.mjs`, `database-unit.test.mjs`, `database.integration.mjs`: UI/webhook tests, database boundary checks, and opt-in real-database verification.
