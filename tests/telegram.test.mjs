@@ -79,7 +79,7 @@ test("welcomes private /start commands including deep links and bot suffix", asy
 test("ignores non-private chats, other commands, non-text and future updates", async () => {
   for (const body of [update("/start", "group"), update("/start", "supergroup"), update("/start", "channel"),
     update("/started"), update("hello /start"), update("/help"), update(null),
-    { update_id: 1, widget_query: {} }, { update_id: 1, edited_message: update().message }]) {
+    { update_id: 1, future_update: {} }, { update_id: 1, edited_message: update().message }]) {
     // Non-text Telegram messages omit text rather than setting it to null.
     if (body.message?.text === null) delete body.message.text;
     assert.equal((await POST(request(body))).status, 200);
@@ -127,7 +127,7 @@ test("registration sends secret and message subscription without dropping update
   };
   await registerWebhook(config);
   assert.deepEqual(JSON.parse(calls[0][1].body), {
-    url: config.TELEGRAM_WEBHOOK_URL, secret_token: secret, allowed_updates: ["message"],
+    url: config.TELEGRAM_WEBHOOK_URL, secret_token: secret, allowed_updates: ["message", "widget_query"],
   });
 });
 test("registration never exposes API or network errors", async () => {

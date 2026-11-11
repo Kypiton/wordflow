@@ -34,7 +34,7 @@ export async function registerWebhook(env = process.env) {
     const response = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, secret_token: secret, allowed_updates: ["message"] }),
+      body: JSON.stringify({ url, secret_token: secret, allowed_updates: ["message", "widget_query"] }),
       redirect: "error",
       signal: AbortSignal.timeout(10_000),
     });

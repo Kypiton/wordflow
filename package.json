@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "telegram:webhook": "node --env-file=.env.local scripts/register-telegram-webhook.mjs",
-    "test:telegram": "tsc --module commonjs --moduleResolution node --target es2022 --esModuleInterop --skipLibCheck --outDir .next/telegram-tests src/app/api/telegram/webhook/route.ts && node --conditions=react-server --test tests/telegram.test.mjs"
+    "test:telegram": "tsc --strict --module commonjs --moduleResolution node --target es2022 --esModuleInterop --skipLibCheck --outDir .next/telegram-tests src/app/api/telegram/webhook/route.ts && node --conditions=react-server --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "next": "16.4.6",
