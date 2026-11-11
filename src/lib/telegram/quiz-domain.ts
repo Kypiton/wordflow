@@ -1,18 +1,43 @@
 export type QuizContent = { term: string; partOfSpeech: string; options: string[] };
-export type Feedback = {
-  status: "answered" | "revealed";
-  selected: number | null;
-  correct: boolean;
-  correctIndex?: number;
-  answer?: string;
-} | { status: "error" | "expired"; message: string; retryable?: boolean };
+
+export type Feedback =
+  | { status: "answered" | "revealed"; selected: number | null; correct: boolean; correctIndex?: number; answer?: string; position?: number; total?: number; hasNext?: boolean }
+  | { status: "question"; position: number; total: number; content: QuizContent }
+  | { status: "completed"; total: number; correctCount: number; incorrectCount: number; accuracy: number }
+  | { status: "error" | "expired"; message: string; retryable?: boolean };
 
 export const invalidQuiz = (): Feedback => ({ status: "error", message: "Неверный запрос. Отправьте /learn для нового задания." });
 export const expiredQuiz = (): Feedback => ({ status: "expired", message: "Задание истекло. Отправьте /learn и начните снова." });
 
+// Legacy format remains supported for backwards compatibility with already-sent widgets.
 export function parseQuizAction(data: string): { sessionId: string; selected: number | null } | null {
   const match = /^q:([a-f0-9]{24}):(a[0-3]|r)$/.exec(data);
   return match ? { sessionId: match[1], selected: match[2] === "r" ? null : Number(match[2][1]) } : null;
+}
+
+export type SessionAction =
+  | { sessionId: string; kind: "answer"; position: number; selected: number }
+  | { sessionId: string; kind: "reveal"; position: number }
+  | { sessionId: string; kind: "next"; position: number }
+  | { sessionId: string; kind: "sync" };
+
+export function parseSessionAction(data: string): SessionAction | null {
+  const legacy = parseQuizAction(data);
+  if (legacy) return legacy.selected === null
+    ? { sessionId: legacy.sessionId, kind: "reveal", position: 0 }
+    : { sessionId: legacy.sessionId, kind: "answer", position: 0, selected: legacy.selected };
+
+  const sync = /^q:([a-f0-9]{24}):s$/.exec(data);
+  if (sync) return { sessionId: sync[1], kind: "sync" };
+
+  const match = /^q:([a-f0-9]{24}):([0-9]|[1-9][0-9]):(a[0-3]|r|n)$/.exec(data);
+  if (!match) return null;
+  const position = Number(match[2]);
+  if (position < 0 || position > 49) return null;
+  const type = match[3];
+  if (type === "n") return { sessionId: match[1], kind: "next", position };
+  if (type === "r") return { sessionId: match[1], kind: "reveal", position };
+  return { sessionId: match[1], kind: "answer", position, selected: Number(type[1]) };
 }
 
 export function quizFeedback(

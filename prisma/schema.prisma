@@ -45,11 +45,26 @@ model WordOption {
   @@unique([wordId, text])
 }
 
+enum SessionStatus {
+  LEGACY
+  ACTIVE
+  COMPLETED
+  EXPIRED
+}
+
 model StudySession {
   id           String         @id @db.VarChar(24)
   userId       BigInt
   chatId       BigInt
   messageId    BigInt?
+  status       SessionStatus @default(LEGACY)
+  currentIndex Int           @default(0)
+  revision     Int           @default(0)
+  completedAt  DateTime?     @db.Timestamptz(3)
+  syncedRevision Int         @default(-1)
+  sendToken    String?       @db.VarChar(24)
+  sendLeaseUntil DateTime?   @db.Timestamptz(3)
+  learnRequests LearnRequest[]
   chatInstance String?        @db.VarChar(256)
   expiresAt    DateTime       @db.Timestamptz(3)
   revokedAt    DateTime?      @db.Timestamptz(3)
@@ -69,6 +84,7 @@ model SessionItem {
   sessionId  String         @db.VarChar(24)
   wordId     String         @db.Uuid
   position   Int
+  optionOrder Int[]         @default([0, 1, 2, 3])
   revealedAt DateTime?      @db.Timestamptz(3)
   createdAt  DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime       @updatedAt @db.Timestamptz(3)
@@ -104,4 +120,16 @@ model WidgetQueryReceipt {
 
   @@index([sessionId])
   @@index([createdAt])
+}
+
+// Deduplicates /learn webhook delivery, even after its session completes.
+model LearnRequest {
+  userId    BigInt
+  messageId BigInt
+  sessionId String       @db.VarChar(24)
+  createdAt DateTime     @default(now()) @db.Timestamptz(3)
+  session   StudySession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  @@id([userId, messageId])
+  @@index([sessionId])
 }
