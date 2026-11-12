@@ -1,10 +1,12 @@
 export type QuizContent = { term: string; partOfSpeech: string; options: string[] };
 
-export type Feedback =
+export type SessionMode = "LEARN" | "REVIEW";
+
+export type Feedback = ({ mode?: SessionMode; revision?: number } & (
   | { status: "answered" | "revealed"; selected: number | null; correct: boolean; correctIndex?: number; answer?: string; position?: number; total?: number; hasNext?: boolean }
   | { status: "question"; position: number; total: number; content: QuizContent }
   | { status: "completed"; total: number; correctCount: number; incorrectCount: number; accuracy: number }
-  | { status: "error" | "expired"; message: string; retryable?: boolean };
+  | { status: "error" | "expired"; message: string; retryable?: boolean }));
 
 export const invalidQuiz = (): Feedback => ({ status: "error", message: "Неверный запрос. Отправьте /learn для нового задания." });
 export const expiredQuiz = (): Feedback => ({ status: "expired", message: "Задание истекло. Отправьте /learn и начните снова." });

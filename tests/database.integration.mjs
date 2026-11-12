@@ -260,6 +260,8 @@ test(
               session: { userId },
             };
 
+            await tx.userWordProgress.deleteMany({ where: { userId } });
+
             await tx.widgetQueryReceipt.deleteMany({
               where: whereSession,
             });

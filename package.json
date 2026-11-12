@@ -16,7 +16,8 @@
     "db:compile": "tsc -p tsconfig.database.json",
     "db:seed": "npm run db:compile && prisma db seed",
     "postinstall": "prisma generate",
-    "test:db": "npm run db:compile && node --env-file-if-exists=.env.local --conditions=react-server --test tests/database.integration.mjs"
+    "test:db": "npm run db:compile && node scripts/test-database.mjs",
+    "db:test:migrate": "node scripts/test-database.mjs migrate"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

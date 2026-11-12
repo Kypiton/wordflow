@@ -1,29 +1,35 @@
 import "server-only";
 
-import { answerWidgetQuery, sendWidget } from "./client";
+import { answerWidgetQuery, sendWidget, sendMessage } from "./client";
 import { quizWidgetHtml } from "./quiz-widget";
 import { isPrivateWidgetQuery, isQueryId, isRecord } from "./types";
 import { PrismaQuizRepository } from "../db/quiz-repository";
+import type { SessionMode } from "./quiz-domain";
 import { invalidQuiz } from "./quiz-domain";
 import type { QueryResult, QuizRepository } from "../db/quiz-repository";
 
 // The repository is stateless. Only the database holds sessions and receipts.
 export const quizStore: QuizRepository = new PrismaQuizRepository();
 
-export async function sendQuiz(userId: number, chatId: number): Promise<void> {
-  const { id, content } = await quizStore.create(userId, chatId);
+export async function sendQuiz(userId: number, chatId: number, mode: SessionMode = "LEARN", requestId?: number): Promise<void> {
+  const start = await quizStore.create(userId, chatId, mode, requestId);
+  if (start.kind === "message") {
+    await sendMessage({ chat_id: chatId, text: start.message });
+    return;
+  }
+  const { id, content } = start;
   try {
     const message = await sendWidget({
-      chat_id: chatId, html: quizWidgetHtml(id, content), allow_queries: true,
-      caption: "WordFlow · Your daily word",
+      chat_id: chatId, html: quizWidgetHtml(id, content, { mode: start.mode ?? mode, total: start.total ?? 10, position: start.position ?? 0 }), allow_queries: true,
+      caption: start.notice ?? `WordFlow · ${start.mode ?? mode}`,
     });
     if (message.chat.id !== chatId || message.chat.type !== "private" || message.message_id <= 0) {
       throw new Error("Invalid widget response.");
     }
-    await quizStore.bind(id, message.message_id);
+    await quizStore.bind(id, message.message_id, start.sendToken);
   } catch {
     // A sent-but-unbound card can never accept answers. Revocation is best effort.
-    try { await quizStore.revoke(id); } catch { /* Fail closed on unbound sessions. */ }
+    try { await quizStore.revoke(id, start.sendToken); } catch { /* Fail closed on unbound sessions. */ }
     throw new Error("Unable to send quiz.");
   }
 }

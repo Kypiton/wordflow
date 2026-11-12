@@ -866,3 +866,38 @@ test('database text is escaped in widget markup and invalid content is rejected'
     }),
   );
 });
+
+test('/review uses REVIEW selection and supports bot suffixes without touching other commands', async () => {
+  let selectedMode;
+  mock.method(quizStore, 'create', async (user, chat, mode) => {
+    selectedMode = mode;
+    return { kind: 'message', message: 'Сейчас нет запланированных повторений. Загляните позже.' };
+  });
+  for (const command of ['/review', '/review@WordFlowBot']) {
+    assert.equal((await post(learn(command))).status, 200);
+    assert.equal(selectedMode, 'REVIEW');
+    assert.equal(calls.at(-1).method, 'sendMessage');
+    assert.match(calls.at(-1).body.text, /нет запланированных повторений/);
+  }
+  const before = calls.length;
+  for (const body of [learn('/reviews'), learn('/review', 'group')]) assert.equal((await post(body)).status, 200);
+  assert.equal(calls.length, before);
+});
+
+test('resume/conflict and no-new-word messages never send a duplicate widget', async () => {
+  mock.method(quizStore, 'create', async () => ({ kind: 'message', message: 'Продолжите активное занятие LEARN.' }));
+  assert.equal((await post(learn('/review'))).status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'sendMessage');
+});
+
+test('small REVIEW sessions render their real total, mode, and completion counter', async () => {
+  const html = quizWidgetHtml('a'.repeat(24), initialContent, { mode: 'REVIEW', total: 3, position: 0 });
+  assert.match(html, /id="mode">REVIEW/);
+  assert.match(html, /01 \/ 03/);
+  assert.ok(deflateSync(html, { level: 9 }).length < 4096);
+  const ui = widgetHarness({ viewer: {}, ready() {}, request: () => Promise.resolve({ result: JSON.stringify({ status: 'completed', mode: 'REVIEW', revision: 3, total: 3, correctCount: 2, incorrectCount: 1, accuracy: 67 }) }) });
+  ui.resume.listeners.click(); await flush();
+  assert.equal(ui.counter.textContent, '03 / 03');
+  assert.match(ui.details.textContent, /67%/);
+});
