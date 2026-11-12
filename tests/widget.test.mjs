@@ -512,7 +512,7 @@ test("widget response timeout is five seconds, below Telegram's answer deadline"
 
 // Miniature DOM harness for HTML widget testing.
 
-function widgetHarness(bridge) {
+function widgetHarness(bridge, content = initialContent) {
   const element = choice => {
     const classes = new Set();
 
@@ -566,14 +566,14 @@ function widgetHarness(bridge) {
       'summary',
       'score',
       'details',
-      'counter',
+      'remembered', 'forgot', 'counter',
       'progress',
     ].map(id => [id, element()]),
   );
 
   ids.term.textContent = initialContent.term;
 
-  const html = quizWidgetHtml('a'.repeat(24), initialContent);
+  const html = quizWidgetHtml('a'.repeat(24), content);
 
   const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
 
@@ -900,4 +900,30 @@ test('small REVIEW sessions render their real total, mode, and completion counte
   ui.resume.listeners.click(); await flush();
   assert.equal(ui.counter.textContent, '03 / 03');
   assert.match(ui.details.textContent, /67%/);
+});
+
+test('personal recall uses synchronous reveal then rating and returns to multiple choice', async () => {
+  const content = { term: 'Overwhelmed', partOfSpeech: '', options: [], kind: 'self' };
+  const seen = [];
+  const bridge = { viewer: { id: 42 }, ready() {}, request(data) {
+    seen.push(data);
+    const result = data.endsWith(':r') ? { status: 'recall', content, position: 0, total: 2, answer: '<b>подавленный</b>', example: 'I felt overwhelmed.', revision: 1 }
+      : data.endsWith(':k') ? { status: 'answered', correct: true, selected: null, position: 0, total: 2, revision: 2 }
+      : { status: 'question', content: initialContent, position: 1, total: 2, revision: 2 };
+    return Promise.resolve({ result: JSON.stringify(result) });
+  } };
+  const ui = widgetHarness(bridge, content);
+  assert.equal(ui.remembered.disabled, true);
+  assert.doesNotMatch(ui.html, /подавленный|I felt overwhelmed/);
+  ui.remembered.listeners.click(); assert.equal(seen.length, 0);
+  ui.reveal.listeners.click(); assert.equal(seen.length, 1); await flush();
+  assert.equal(ui.remembered.hidden, false); assert.equal(ui.remembered.disabled, false);
+  assert.match(ui.feedback.textContent, /<b>подавленный<\/b>/);
+  assert.equal(ui.buttons.every(b => b.hidden), true);
+  ui.remembered.listeners.click(); assert.ok(seen.at(-1).endsWith(':k')); await flush();
+  assert.equal(ui.next.hidden, false); assert.equal(ui.remembered.hidden, true);
+  ui.next.listeners.click(); await flush();
+  assert.equal(ui.buttons.every(b => !b.hidden), true);
+  assert.equal(ui.term.textContent, 'Reluctant');
+  assert.ok(deflateSync(ui.html, { level: 9 }).length < 4096);
 });

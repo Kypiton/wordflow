@@ -56,4 +56,4 @@ export const WELCOME_MESSAGE =
   "Welcome to WordFlow! 👋\n\n" +
   "WordFlow is your English vocabulary learning app, right here in Telegram. " +
   "Build your vocabulary with new words and short practice sessions.\n\n" +
-  "Send /learn for new words or /review for scheduled practice!";
+  "Send /learn for new words or /review for scheduled practice!\n\nЛичный словарь: /add word — перевод · /mywords · /mode";

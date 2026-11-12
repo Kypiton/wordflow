@@ -17,7 +17,8 @@
     "db:seed": "npm run db:compile && prisma db seed",
     "postinstall": "prisma generate",
     "test:db": "npm run db:compile && node scripts/test-database.mjs",
-    "db:test:migrate": "node scripts/test-database.mjs migrate"
+    "db:test:migrate": "node scripts/test-database.mjs migrate",
+    "db:test:status": "node scripts/test-database.mjs status"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

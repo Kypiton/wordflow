@@ -20,7 +20,7 @@ export async function sendQuiz(userId: number, chatId: number, mode: SessionMode
   const { id, content } = start;
   try {
     const message = await sendWidget({
-      chat_id: chatId, html: quizWidgetHtml(id, content, { mode: start.mode ?? mode, total: start.total ?? 10, position: start.position ?? 0 }), allow_queries: true,
+      chat_id: chatId, html: quizWidgetHtml(id, content, { mode: start.mode ?? mode, total: start.total ?? 10, position: start.position ?? 0 }), allow_queries: true, protect_content: true,
       caption: start.notice ?? `WordFlow · ${start.mode ?? mode}`,
     });
     if (message.chat.id !== chatId || message.chat.type !== "private" || message.message_id <= 0) {

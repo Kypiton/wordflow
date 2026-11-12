@@ -13,6 +13,12 @@ model TelegramUser {
   id        BigInt         @id
   createdAt DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt DateTime       @updatedAt @db.Timestamptz(3)
+  vocabularyMode VocabularyMode @default(GENERAL)
+  vocabularyWindowAt DateTime? @db.Timestamptz(3)
+  vocabularyRequestCount Int @default(0)
+  personalWords PersonalWord[]
+  vocabularyDraft VocabularyDraft?
+  vocabularyReceipts VocabularyReceipt[]
   sessions  StudySession[]
   progress  UserWordProgress[]
 }
@@ -26,11 +32,17 @@ model Word {
   partOfSpeech String        @db.VarChar(40)
   createdAt    DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
+  personalWordId String? @db.Uuid
+  personalWord PersonalWord? @relation(fields: [personalWordId], references: [id], onDelete: Restrict)
+  isCurrent Boolean @default(true)
+  translation String? @db.VarChar(120)
+  example String? @db.VarChar(160)
   options      WordOption[]
   items        SessionItem[]
   progress     UserWordProgress[]
 
   @@unique([slug, version])
+  @@index([personalWordId, isCurrent])
 }
 
 model WordOption {
@@ -71,6 +83,7 @@ model StudySession {
   userId       BigInt
   chatId       BigInt
   messageId    BigInt?
+  vocabularyMode VocabularyMode @default(GENERAL)
   mode         SessionMode   @default(LEARN)
   status       SessionStatus @default(LEGACY)
   currentIndex Int           @default(0)
@@ -115,7 +128,8 @@ model SessionItem {
 model ReviewAttempt {
   id               String      @id @default(uuid()) @db.Uuid
   sessionItemId    String      @unique @db.Uuid
-  // Null means the answer was revealed before a selection; never awards progress.
+  // Null for reveal-first MCQ or self-review; selfRating distinguishes recall.
+  selfRating Boolean?
   selectedPosition Int?
   correct          Boolean
   createdAt        DateTime    @default(now()) @db.Timestamptz(3)
@@ -169,4 +183,44 @@ model UserWordProgress {
   @@id([userId, wordId])
   @@index([userId, dueAt])
   @@index([wordId])
+}
+
+
+enum VocabularyMode {
+  GENERAL
+  PERSONAL
+  MIXED
+}
+
+model PersonalWord {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId BigInt
+  termKey String @db.VarChar(80)
+  archivedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  owner TelegramUser @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  versions Word[]
+  @@unique([ownerId, termKey])
+  @@index([ownerId, archivedAt, createdAt])
+}
+
+model VocabularyDraft {
+  userId BigInt @id
+  token String @unique @db.VarChar(24)
+  data Json
+  promptMessageId BigInt?
+  expiresAt DateTime @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  user TelegramUser @relation(fields: [userId], references: [id], onDelete: Restrict)
+}
+
+model VocabularyReceipt {
+  userId BigInt
+  messageId BigInt
+  fingerprint String @db.Char(64)
+  response Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  user TelegramUser @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@id([userId, messageId])
 }

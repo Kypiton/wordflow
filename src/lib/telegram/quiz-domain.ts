@@ -1,9 +1,10 @@
-export type QuizContent = { term: string; partOfSpeech: string; options: string[] };
+export type QuizContent = { term: string; partOfSpeech: string; options: string[]; kind?: "self" };
 
 export type SessionMode = "LEARN" | "REVIEW";
 
 export type Feedback = ({ mode?: SessionMode; revision?: number } & (
   | { status: "answered" | "revealed"; selected: number | null; correct: boolean; correctIndex?: number; answer?: string; position?: number; total?: number; hasNext?: boolean }
+  | { status: "recall"; position: number; total: number; content: QuizContent; answer: string; example?: string }
   | { status: "question"; position: number; total: number; content: QuizContent }
   | { status: "completed"; total: number; correctCount: number; incorrectCount: number; accuracy: number }
   | { status: "error" | "expired"; message: string; retryable?: boolean }));
@@ -20,6 +21,7 @@ export function parseQuizAction(data: string): { sessionId: string; selected: nu
 export type SessionAction =
   | { sessionId: string; kind: "answer"; position: number; selected: number }
   | { sessionId: string; kind: "reveal"; position: number }
+  | { sessionId: string; kind: "rating"; position: number; remembered: boolean }
   | { sessionId: string; kind: "next"; position: number }
   | { sessionId: string; kind: "sync" };
 
@@ -32,11 +34,12 @@ export function parseSessionAction(data: string): SessionAction | null {
   const sync = /^q:([a-f0-9]{24}):s$/.exec(data);
   if (sync) return { sessionId: sync[1], kind: "sync" };
 
-  const match = /^q:([a-f0-9]{24}):([0-9]|[1-9][0-9]):(a[0-3]|r|n)$/.exec(data);
+  const match = /^q:([a-f0-9]{24}):([0-9]|[1-9][0-9]):(a[0-3]|r|n|k|f)$/.exec(data);
   if (!match) return null;
   const position = Number(match[2]);
   if (position < 0 || position > 49) return null;
   const type = match[3];
+  if (type === "k" || type === "f") return { sessionId: match[1], kind: "rating", position, remembered: type === "k" };
   if (type === "n") return { sessionId: match[1], kind: "next", position };
   if (type === "r") return { sessionId: match[1], kind: "reveal", position };
   return { sessionId: match[1], kind: "answer", position, selected: Number(type[1]) };

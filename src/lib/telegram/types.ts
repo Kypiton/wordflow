@@ -3,6 +3,8 @@ export interface TelegramMessage {
   message_id: number;
   chat: { id: number; type: string };
   text?: string;
+  reply_to_message?: { message_id: number };
+  forward_origin?: unknown;
   from?: { id: number; is_bot: boolean };
 }
 
@@ -16,12 +18,14 @@ export interface TelegramUpdate {
 export interface SendMessageRequest {
   chat_id: number;
   text: string;
+  protect_content?: true;
 }
 
 export interface SendWidgetRequest {
   chat_id: number;
   html: string;
   allow_queries: true;
+  protect_content?: true;
   caption?: string;
 }
 
@@ -72,6 +76,7 @@ export function isTelegramMessage(value: unknown): value is TelegramMessage {
     isRecord(value.chat) && Number.isSafeInteger(value.chat.id) &&
     typeof value.chat.type === "string" &&
     (value.from === undefined || (isRecord(value.from) && isPositiveId(value.from.id) && typeof value.from.is_bot === "boolean")) &&
+    (value.reply_to_message === undefined || (isRecord(value.reply_to_message) && isPositiveId(value.reply_to_message.message_id))) &&
     (value.text === undefined || typeof value.text === "string");
 }
 

@@ -21,6 +21,9 @@ export interface QuizRepository {
   delivered(id: string): Promise<void>;
 }
 
+function contentOf(word: { term: string; partOfSpeech: string; personalWordId: string | null; options: { text: string }[] }): QuizContent {
+  return { term: word.term, partOfSpeech: word.partOfSpeech, options: word.options.map(o => o.text), ...(word.personalWordId ? { kind: "self" as const } : {}) };
+}
 const WORD_COUNT = 10;
 const SESSION_DURATION_MS = 30 * 60_000;
 
@@ -48,6 +51,7 @@ export class PrismaQuizRepository implements QuizRepository {
       // serializes SRS updates from multiple pre-existing LEGACY sessions.
       await tx.$queryRaw`SELECT id FROM "TelegramUser" WHERE id = ${user} FOR UPDATE`;
       const [clock] = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
+      const owner = await tx.telegramUser.findUniqueOrThrow({ where: { id: user } });
       await tx.studySession.updateMany({ where: { userId: user, status: "ACTIVE", expiresAt: { lte: clock.now } }, data: { status: "EXPIRED", updatedAt: clock.now } });
       const include = { items: { orderBy: { position: "asc" as const }, include: { attempt: true, word: { include: { options: { orderBy: { position: "asc" as const } } } } } } };
       const request = requestId === undefined ? null : await tx.learnRequest.findUnique({
@@ -68,20 +72,26 @@ export class PrismaQuizRepository implements QuizRepository {
       let isNew = false;
       if (!session) {
         const words = await tx.word.findMany({
-          where: mode === "REVIEW"
-            ? { progress: { some: { userId: user, dueAt: { lte: clock.now } } } }
-            : { progress: { none: { userId: user } }, items: { none: { session: { userId: user }, attempt: { isNot: null } } } },
+          where: { isCurrent: true, AND: [
+            owner.vocabularyMode === "GENERAL" ? { personalWordId: null }
+              : owner.vocabularyMode === "PERSONAL" ? { personalWord: { ownerId: user, archivedAt: null } }
+              : { OR: [{ personalWordId: null }, { personalWord: { ownerId: user, archivedAt: null } }] },
+            mode === "REVIEW"
+              ? { progress: { some: { userId: user, dueAt: { lte: clock.now } } } }
+              : { progress: { none: { userId: user } }, items: { none: { session: { userId: user }, attempt: { isNot: null } } } },
+          ] },
           include: { options: { orderBy: { position: "asc" } }, progress: { where: { userId: user } } },
         });
-        const valid = words.filter(word => word.options.length === 4 && word.options.filter(o => o.isCorrect).length === 1 && word.options.every((o, i) => o.position === i));
+        const valid = words.filter(word => word.personalWordId ? Boolean(word.translation) && word.options.length === 0 : word.options.length === 4 && word.options.filter(o => o.isCorrect).length === 1 && word.options.every((o, i) => o.position === i));
+        valid.sort((a, b) => Number(Boolean(a.personalWordId)) - Number(Boolean(b.personalWordId)));
         const unique = Array.from(new Map(valid.map(word => [word.term.toLowerCase(), word])).values());
         const chosen = (mode === "LEARN" ? shuffle(unique) : unique.sort((a, b) =>
           a.progress[0].dueAt.getTime() - b.progress[0].dueAt.getTime() || a.id.localeCompare(b.id))).slice(0, WORD_COUNT);
         if (!chosen.length) return { kind: "message", message: mode === "REVIEW"
           ? "Сейчас нет запланированных повторений. Загляните позже — слова появятся, когда подойдёт время."
-          : "Новых слов пока нет. Отправьте /review, чтобы проверить запланированные повторения." };
+          : `Новых слов пока нет в режиме ${owner.vocabularyMode}. /add word — перевод · /mode · /review.` };
         session = await tx.studySession.create({ data: {
-          id: randomBytes(12).toString("hex"), userId: user, chatId: user, mode, status: "ACTIVE",
+          id: randomBytes(12).toString("hex"), userId: user, chatId: user, mode, vocabularyMode: owner.vocabularyMode, status: "ACTIVE",
           expiresAt: new Date(clock.now.getTime() + SESSION_DURATION_MS),
           items: { create: chosen.map((word, position) => ({ wordId: word.id, position })) },
         }, include });
@@ -95,7 +105,7 @@ export class PrismaQuizRepository implements QuizRepository {
       await tx.studySession.update({ where: { id: session.id }, data: { sendToken, sendLeaseUntil: new Date(clock.now.getTime() + 30_000) } });
       const position = Math.max(0, session.items.findIndex(item => !item.attempt));
       const first = session.items[position].word;
-      return { kind: "widget", id: session.id, content: { term: first.term, partOfSpeech: first.partOfSpeech, options: first.options.map(o => o.text) },
+      return { kind: "widget", id: session.id, content: contentOf(first),
         total: session.items.length, position, mode: session.mode, sendToken,
         ...(isNew && session.items.length < WORD_COUNT ? { notice: `Сегодня доступно ${session.items.length} ${mode === "LEARN" ? "новых слов" : "слов для повторения"}. Начнём короткое занятие.` } : {}),
       };
@@ -135,7 +145,7 @@ export class PrismaQuizRepository implements QuizRepository {
         include: {
           items: {
             orderBy: { position: "asc" }, include: {
-              attempt: true, word: { include: { options: { orderBy: { position: "asc" } } } },
+              attempt: true, word: { include: { personalWord: true, options: { orderBy: { position: "asc" } } } },
             }
           }
         },
@@ -147,6 +157,7 @@ export class PrismaQuizRepository implements QuizRepository {
         (session.chatInstance !== null && session.chatInstance !== query.chat_instance)) {
         return { feedback: invalidQuiz() };
       }
+      if (session.items.some(item => item.word.personalWord && item.word.personalWord.ownerId !== session.userId)) return { feedback: invalidQuiz() };
       if (session.revokedAt || session.expiresAt <= clock.now) return { feedback: expiredQuiz() };
 
       const previous = await tx.widgetQueryReceipt.findUnique({ where: { id: query.id } });
@@ -168,12 +179,11 @@ export class PrismaQuizRepository implements QuizRepository {
       };
       const question = (index: number): Feedback => {
         const item = items[index];
-        return {
-          status: "question", mode: session.mode, revision: session.revision, position: index, total: items.length, content: {
-            term: item.word.term, partOfSpeech: item.word.partOfSpeech,
-            options: item.word.options.map(option => option.text),
-          }
-        };
+        const base = { mode: session.mode, revision: session.revision, position: index, total: items.length, content: contentOf(item.word) };
+        return item.word.personalWordId && item.revealedAt
+          ? { ...base, status: "recall", answer: item.word.translation!, ...(item.word.example ? { example: item.word.example } : {}) }
+          : { ...base, status: "question" };
+
       };
       let feedback: Feedback;
 
@@ -192,22 +202,32 @@ export class PrismaQuizRepository implements QuizRepository {
       } else {
         const index = action.position;
         const item = items[index];
-        if (!item || index !== currentIndex || !item.word.options.some(o => o.isCorrect) ||
-          item.word.options.filter(o => o.isCorrect).length !== 1 ||
-          (action.kind === "answer" && !item.word.options.some(o => o.position === action.selected))) {
+        const personal = Boolean(item?.word.personalWordId);
+        const correctOption = item?.word.options.find(o => o.isCorrect);
+        if (!item || index !== currentIndex ||
+            (personal ? !item.word.translation || action.kind === "answer" || (action.kind === "rating" && !item.revealedAt)
+              : action.kind === "rating" || !correctOption || item.word.options.filter(o => o.isCorrect).length !== 1 ||
+                (action.kind === "answer" && !item.word.options.some(o => o.position === action.selected)))) {
           feedback = invalidQuiz();
+        } else if (personal && action.kind === "reveal") {
+          // Reveal alone is not an attempt. A later authenticated rating commits SRS.
+          if (!item.revealedAt) {
+            await tx.sessionItem.update({ where: { id: item.id }, data: { revealedAt: clock.now } });
+            await tx.studySession.update({ where: { id: session.id }, data: { revision: { increment: 1 } } });
+            item.revealedAt = clock.now;
+            session.revision++;
+          }
+          feedback = question(index);
         } else {
-          const correctOption = item.word.options.find(o => o.isCorrect)!;
           const selected = action.kind === "answer" ? action.selected : null;
-          const attempt = await tx.reviewAttempt.create({
-            data: {
-              sessionItemId: item.id, selectedPosition: selected,
-              correct: selected === correctOption.position, createdAt: clock.now,
-            }
-          });
+          const correct = action.kind === "rating" ? action.remembered : selected === correctOption!.position;
+          const attempt = await tx.reviewAttempt.create({ data: {
+            sessionItemId: item.id, selectedPosition: selected, correct,
+            selfRating: action.kind === "rating" ? action.remembered : null, createdAt: clock.now,
+          } });
           const key = { userId: session.userId, wordId: item.wordId };
           const prior = await tx.userWordProgress.findUnique({ where: { userId_wordId: key } });
-          const scheduled = scheduleReview(prior, action.kind === "reveal" ? "revealed" : attempt.correct ? "correct" : "incorrect", clock.now);
+          const scheduled = scheduleReview(prior, action.kind === "reveal" ? "revealed" : correct ? "correct" : "incorrect", clock.now);
           await tx.userWordProgress.upsert({ where: { userId_wordId: key },
             create: { ...key, ...scheduled, lastAttemptId: attempt.id, createdAt: clock.now, updatedAt: clock.now },
             update: { ...scheduled, lastAttemptId: attempt.id, updatedAt: clock.now },
@@ -216,12 +236,10 @@ export class PrismaQuizRepository implements QuizRepository {
             currentIndex: index + 1, revision: { increment: 1 }, updatedAt: clock.now,
             ...(index + 1 === items.length ? { status: "COMPLETED", completedAt: clock.now } : {}),
           } });
-          if (action.kind === "reveal") await tx.sessionItem.update({
-            where: { id: item.id }, data: { revealedAt: clock.now },
-          });
-          const base = quizFeedback(attempt, action.kind === "reveal", correctOption);
+          if (action.kind === "reveal") await tx.sessionItem.update({ where: { id: item.id }, data: { revealedAt: clock.now } });
           feedback = {
-            ...base, correctIndex: correctOption.position, answer: correctOption.text,
+            ...(personal ? { status: "answered", selected: null, correct } : quizFeedback(attempt, action.kind === "reveal", correctOption!)),
+            ...(personal ? { answer: item.word.translation! } : { correctIndex: correctOption!.position, answer: correctOption!.text }),
             mode: session.mode, revision: session.revision + 1, position: index, total: items.length, hasNext: true
           } as Feedback;
         }

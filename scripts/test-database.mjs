@@ -11,15 +11,17 @@ try {
   allowed = ['postgres:', 'postgresql:'].includes(parsed.protocol) &&
     parsed.hostname.startsWith('ep-nameless-hall') && parsed.hostname.endsWith('.neon.tech');
 } catch {}
-const migrate = process.argv[2] === 'migrate';
+const action = process.argv[2] ?? 'test';
+if (!['test', 'migrate', 'status'].includes(action)) throw new Error('Unknown test database action.');
+const administration = action !== 'test';
 if (!allowed || process.env.WORDFLOW_DB_TESTS !== '1') {
   console.log('Dedicated test database not enabled. Set TEST_DATABASE_URL for the allowlisted Neon test branch and WORDFLOW_DB_TESTS=1.');
-  process.exit(migrate ? 1 : 0);
+  process.exit(administration ? 1 : 0);
 }
 const env = { ...process.env, DATABASE_URL: url, DIRECT_URL: url, TEST_DATABASE_URL: url };
-const args = migrate
-  ? ['node_modules/prisma/build/index.js', 'migrate', 'deploy']
-  : ['--conditions=react-server', '--test', '--test-concurrency=1', 'tests/database.integration.mjs', 'tests/srs.integration.mjs'];
+const args = administration
+  ? ['node_modules/prisma/build/index.js', 'migrate', action === 'status' ? 'status' : 'deploy']
+  : ['--conditions=react-server', '--test', '--test-concurrency=1', 'tests/database.integration.mjs', 'tests/srs.integration.mjs', 'tests/personal.integration.mjs'];
 const result = spawnSync(process.execPath, args, { env, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
 const clean = value => String(value ?? '').split(url).join('[database URL]').replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, '[database URL]');
 process.stdout.write(clean(result.stdout));

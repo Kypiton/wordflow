@@ -1,3 +1,4 @@
+import { handleVocabularyMessage } from "../../../../lib/telegram/vocabulary";
 import { sendMessage } from "../../../../lib/telegram/client";
 import { isTelegramUpdate } from "../../../../lib/telegram/types";
 import { handleWidgetQuery, sendQuiz } from "../../../../lib/telegram/quiz";
@@ -39,6 +40,12 @@ export async function POST(request: Request): Promise<Response> {
     } catch {
       return Response.json({ error: "Unable to answer widget query." }, { status: 502 });
     }
+  }
+
+  try {
+    if (await handleVocabularyMessage(update.message)) return Response.json({ ok: true });
+  } catch {
+    return Response.json({ error: "Unable to handle vocabulary request." }, { status: 502 });
   }
 
   const mode = commandChatId(update, "review") !== undefined ? "REVIEW" : "LEARN";
