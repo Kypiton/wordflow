@@ -43,7 +43,7 @@ export function startChatId(update: TelegramUpdate): number | undefined {
   return commandChatId(update, "start");
 }
 
-export function commandChatId(update: TelegramUpdate, command: "start" | "learn" | "review" | "menu" | "help"): number | undefined {
+export function commandChatId(update: TelegramUpdate, command: "start" | "learn" | "review" | "menu" | "help" | "resume"): number | undefined {
   const message = update.message;
   if (message?.chat.type !== "private" || !message.text) return undefined;
   // Accept deep-link arguments and Telegram's /command@bot form.

@@ -13,11 +13,12 @@ import type { Feedback, QuizContent, SessionMode } from "../telegram/quiz-domain
 export type QueryResult = { feedback: Feedback; receiptId?: string; delivered?: boolean };
 export type SessionStart =
   | { kind: "message"; message: string }
-  | { kind: "widget"; id: string; content: QuizContent; total: number; position: number; mode: SessionMode; sendToken: string; notice?: string };
+  | { kind: "widget"; id: string; content: QuizContent; total: number; position: number; mode: SessionMode; sendToken: string; notice?: string; rebind?: boolean };
 export interface QuizRepository {
-  create(userId: number, chatId: number, mode?: SessionMode, requestId?: number): Promise<SessionStart>;
+  create(userId: number, chatId: number, mode?: SessionMode, requestId?: number, resumeExisting?: boolean): Promise<SessionStart>;
   bind(id: string, messageId: number, sendToken?: string): Promise<void>;
   revoke(id: string, sendToken?: string): Promise<void>;
+  release(id: string, sendToken: string): Promise<void>;
   process(query: PrivateWidgetQuery): Promise<QueryResult>;
   delivered(id: string): Promise<void>;
 }
@@ -40,7 +41,7 @@ function shuffle<T>(items: T[]): T[] {
 export class PrismaQuizRepository implements QuizRepository {
   constructor(private database: () => PrismaClient = getDatabase) { }
 
-  async create(userId: number, chatId: number, mode: SessionMode = "LEARN", requestId?: number): Promise<SessionStart> {
+  async create(userId: number, chatId: number, mode: SessionMode = "LEARN", requestId?: number, resumeExisting = false): Promise<SessionStart> {
     if (!isPositiveId(userId) || userId !== chatId || !["LEARN", "REVIEW"].includes(mode) ||
         (requestId !== undefined && !isPositiveId(requestId))) throw new Error("Invalid quiz owner.");
     return this.database().$transaction(async tx => {
@@ -70,7 +71,11 @@ export class PrismaQuizRepository implements QuizRepository {
         session = candidates.find(candidate => candidate.status === "ACTIVE") ??
           candidates.find(candidate => candidate.items.some(item => !item.attempt)) ?? null;
       }
+      // Replayed Telegram messages must not send a second widget. A fresh
+      // /resume message is needed for every deliberate recovery attempt.
+      if (resumeExisting && request) return { kind: "message", message: "Запрос продолжения уже обработан. Если карточка не открылась, нажмите «▶️ Продолжить занятие» ещё раз." };
       let isNew = false;
+      if (!session && resumeExisting) return { kind: "message", message: "Активного занятия нет. Нажмите «📚 Учить слова» или «🔁 Повторить»." };
       if (!session) {
         const words = await tx.word.findMany({
           where: { isCurrent: true, AND: [
@@ -124,8 +129,8 @@ export class PrismaQuizRepository implements QuizRepository {
         isNew = true;
       }
       if (requestId !== undefined && !request) await tx.learnRequest.create({ data: { userId: user, messageId: BigInt(requestId), sessionId: session.id } });
-      if (session.messageId !== null) return { kind: "message", message:
-        `${session.mode === mode ? "Продолжим" : "Сначала завершите"} активное занятие ${session.mode === "LEARN" ? "изучения новых слов" : "повторения"}. Нажмите «Продолжить занятие» в его виджете выше. Новое занятие не создано.` };
+      if (session.messageId !== null && !resumeExisting) return { kind: "message", message:
+        `У вас есть активное занятие ${session.mode === "LEARN" ? "изучения" : "повторения"}. Нажмите «▶️ Продолжить занятие» в меню снизу, чтобы получить карточку здесь. Прогресс сохранён.` };
       if (session.sendLeaseUntil && session.sendLeaseUntil > clock.now) return { kind: "message", message: "Виджет уже отправляется. Если он не появился, повторите команду через 30 секунд." };
       const sendToken = randomBytes(12).toString("hex");
       await tx.studySession.update({ where: { id: session.id }, data: { sendToken, sendLeaseUntil: new Date(clock.now.getTime() + 30_000) } });
@@ -133,6 +138,7 @@ export class PrismaQuizRepository implements QuizRepository {
       const first = session.items[position].word;
       return { kind: "widget", id: session.id, content: contentOf(first),
         total: session.items.length, position, mode: session.mode, sendToken,
+        ...(session.messageId !== null ? { rebind: true } : {}),
         ...(isNew && session.items.length < WORD_COUNT ? { notice: `Сегодня доступно ${session.items.length} ${mode === "LEARN" ? "новых слов" : "слов для повторения"}. Начнём короткое занятие.` } : {}),
       };
     });
@@ -141,9 +147,18 @@ export class PrismaQuizRepository implements QuizRepository {
   async bind(id: string, messageId: number, sendToken?: string): Promise<void> {
     if (!isPositiveId(messageId)) throw new Error("Invalid message.");
     const result = await this.database().studySession.updateMany({
-      where: { id, messageId: null, revokedAt: null, ...(sendToken ? { sendToken } : {}) }, data: { messageId: BigInt(messageId), sendToken: null, sendLeaseUntil: null },
+      where: { id, revokedAt: null, status: { in: ["ACTIVE", "LEGACY"] }, ...(sendToken ? { sendToken } : { messageId: null }) },
+      data: { messageId: BigInt(messageId), chatInstance: null, sendToken: null, sendLeaseUntil: null },
     });
     if (result.count !== 1) throw new Error("Quiz cannot be activated.");
+  }
+
+  async release(id: string, sendToken: string): Promise<void> {
+    // Recovery failure must NOT invalidate the previously bound widget.
+    await this.database().studySession.updateMany({
+      where: { id, sendToken, revokedAt: null },
+      data: { sendToken: null, sendLeaseUntil: null },
+    });
   }
 
   async revoke(id: string, sendToken?: string): Promise<void> {

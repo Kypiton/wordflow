@@ -55,15 +55,16 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Unable to handle vocabulary request." }, { status: 502 });
   }
 
+  const isResume = commandChatId(update, "resume") !== undefined;
   const mode = commandChatId(update, "review") !== undefined ? "REVIEW" : "LEARN";
-  const learnChatId = commandChatId(update, mode === "REVIEW" ? "review" : "learn");
+  const learnChatId = isResume ? commandChatId(update, "resume") : commandChatId(update, mode === "REVIEW" ? "review" : "learn");
   if (learnChatId !== undefined) {
     const user = update.message?.from;
     if (!user || user.is_bot || user.id !== learnChatId) {
       return Response.json({ error: "Invalid quiz sender." }, { status: 400 });
     }
     try {
-      await sendQuiz(user.id, learnChatId, mode, update.message?.message_id);
+      await sendQuiz(user.id, learnChatId, mode, update.message?.message_id, isResume);
     } catch {
       return Response.json({ error: "Unable to send quiz." }, { status: 502 });
     }

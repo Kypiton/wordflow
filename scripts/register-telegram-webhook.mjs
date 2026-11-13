@@ -47,6 +47,7 @@ export async function registerWebhook(env = process.env) {
         { command: "menu", description: "Главное меню" },
         { command: "learn", description: "Учить новые слова" },
         { command: "review", description: "Повторить слова" },
+        { command: "resume", description: "Вернуть активное занятие" },
         { command: "add", description: "Добавить своё слово" },
         { command: "mywords", description: "Мой словарь" },
         { command: "mode", description: "Выбрать словарь" },

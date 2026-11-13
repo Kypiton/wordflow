@@ -12,8 +12,8 @@ import type { QueryResult, QuizRepository } from "../db/quiz-repository";
 // The repository is stateless. Only the database holds sessions and receipts.
 export const quizStore: QuizRepository = new PrismaQuizRepository();
 
-export async function sendQuiz(userId: number, chatId: number, mode: SessionMode = "LEARN", requestId?: number): Promise<void> {
-  const start = await quizStore.create(userId, chatId, mode, requestId);
+export async function sendQuiz(userId: number, chatId: number, mode: SessionMode = "LEARN", requestId?: number, resumeExisting = false): Promise<void> {
+  const start = await quizStore.create(userId, chatId, mode, requestId, resumeExisting);
   if (start.kind === "message") {
     await sendMessage({ chat_id: chatId, text: start.message, reply_markup: EMPTY_ACTIONS });
     return;
@@ -29,8 +29,12 @@ export async function sendQuiz(userId: number, chatId: number, mode: SessionMode
     }
     await quizStore.bind(id, message.message_id, start.sendToken);
   } catch {
-    // A sent-but-unbound card can never accept answers. Revocation is best effort.
-    try { await quizStore.revoke(id, start.sendToken); } catch { /* Fail closed on unbound sessions. */ }
+    // On recovery failure leave the original widget bound and usable.
+    // Only brand-new sessions are revoked when initial delivery fails.
+    try {
+      if (start.rebind) await quizStore.release(id, start.sendToken);
+      else await quizStore.revoke(id, start.sendToken);
+    } catch { /* Best effort; the send lease expires automatically. */ }
     throw new Error("Unable to send quiz.");
   }
 }

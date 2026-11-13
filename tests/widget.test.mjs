@@ -28,6 +28,8 @@ beforeEach(() => {
     mock.method(quizStore, method, (...args) => fake[method](...args));
   }
 
+  mock.method(quizStore, 'release', async () => {});
+
   process.env.TELEGRAM_BOT_TOKEN = token;
   process.env.TELEGRAM_WEBHOOK_SECRET = 'test_secret';
 
@@ -926,4 +928,34 @@ test('personal recall uses synchronous reveal then rating and returns to multipl
   assert.equal(ui.buttons.every(b => !b.hidden), true);
   assert.equal(ui.term.textContent, 'Reluctant');
   assert.ok(deflateSync(ui.html, { level: 9 }).length < 4096);
+});
+
+
+test('resume command sends a fresh widget for an active session without creating another', async () => {
+  const sessionId = 'a'.repeat(24);
+  let args;
+  mock.method(quizStore, 'create', async (...values) => {
+    args = values;
+    return { kind: 'widget', id: sessionId, content: initialContent, total: 10,
+      position: 3, mode: 'LEARN', sendToken: 'fresh-lease', rebind: true };
+  });
+  mock.method(quizStore, 'bind', async () => {});
+  assert.equal((await post(learn('▶️ Продолжить занятие'))).status, 200);
+  assert.deepEqual(args, [42, 42, 'LEARN', 20, true]);
+  assert.equal(calls.filter(call => call.method === 'sendWidget').length, 1);
+  const payload = calls.find(call => call.method === 'sendWidget').body;
+  assert.match(payload.html, /04 \/ 10/);
+});
+
+test('resume failure releases lease without revoking existing session', async () => {
+  let released = 0, revoked = 0;
+  mock.method(quizStore, 'create', async () => ({ kind: 'widget', id: 'a'.repeat(24),
+    content: initialContent, total: 10, position: 1, mode: 'LEARN',
+    sendToken: 'recover-lease', rebind: true }));
+  mock.method(quizStore, 'release', async () => { released++; });
+  mock.method(quizStore, 'revoke', async () => { revoked++; });
+  globalThis.fetch = async () => { throw new Error('send failed'); };
+  assert.equal((await post(learn('/resume'))).status, 502);
+  assert.equal(released, 1);
+  assert.equal(revoked, 0);
 });

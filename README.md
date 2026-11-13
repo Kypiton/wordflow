@@ -239,3 +239,17 @@ Telegram API reference: [protected messages and sendWidget](https://core.telegra
 Task #6.1 manual smoke test (development bot/test branch): open `/start` on desktop and mobile; add a word entirely through prompts/buttons; double-tap Save; browse page/detail; edit; archive and restore; choose My words; finish a recall session; check an active session survives a settings change; try an expired button; return through `/menu`. Also verify legacy `/learn`, `/review`, `/add word — перевод`, and `/mode PERSONAL`. Do not change production data to force due reviews.
 
 Official navigation APIs: [reply keyboards](https://core.telegram.org/bots/api#replykeyboardmarkup), [callback acknowledgement](https://core.telegram.org/bots/api#answercallbackquery), [message editing](https://core.telegram.org/bots/api#editmessagetext), [command registration](https://core.telegram.org/bots/api#setmycommands).
+
+
+### Возобновление занятия — Task #7.1
+
+Если Telegram остановил HTML Widget или карточка осталась далеко в истории чата,
+нажмите **▶️ Продолжить занятие** на постоянной клавиатуре либо отправьте `/resume`.
+WordFlow отправит новый виджет внизу переписки **для той же активной сессии**.
+Уже сохранённые ответы и интервалы SRS не изменяются. Старая карточка становится
+неактуальной после успешной привязки новой; её повторные запросы отвергаются.
+Если новое сообщение не удалось отправить, старая карточка остаётся действующей.
+Повторная доставка той же команды Telegram не должна создавать ещё один виджет.
+Когда активного занятия нет, бот предложит начать новое через меню.
+Занятия по-прежнему имеют обычный срок действия; истёкшие не восстанавливаются.
+Изменений Prisma-схемы и миграций для №7.1 нет.
