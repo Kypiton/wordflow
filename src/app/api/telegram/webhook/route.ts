@@ -1,4 +1,5 @@
-import { handleVocabularyMessage } from "../../../../lib/telegram/vocabulary";
+import { handleVocabularyMessage, handleCallbackQuery } from "../../../../lib/telegram/vocabulary";
+import { MAIN_KEYBOARD, MENU_TEXT, HELP_TEXT, menuCommand } from "../../../../lib/telegram/navigation";
 import { sendMessage } from "../../../../lib/telegram/client";
 import { isTelegramUpdate } from "../../../../lib/telegram/types";
 import { handleWidgetQuery, sendQuiz } from "../../../../lib/telegram/quiz";
@@ -6,7 +7,6 @@ import {
   isValidWebhookSecret,
   startChatId,
   verifyWebhookSecret,
-  WELCOME_MESSAGE,
   commandChatId,
   readUpdate,
 } from "../../../../lib/telegram/webhook";
@@ -32,6 +32,13 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Invalid update." }, { status: 400 });
   }
 
+  if (update.callback_query !== undefined) {
+    try {
+      const handled = await handleCallbackQuery(update.callback_query);
+      return Response.json({ ok: handled }, { status: handled ? 200 : 400 });
+    } catch { return Response.json({ error: "Unable to handle callback." }, { status: 502 }); }
+  }
+  if (update.message?.text) update.message.text = menuCommand(update.message.text);
   if (update.widget_query !== undefined) {
     try {
       const handled = await handleWidgetQuery(update.widget_query);
@@ -63,10 +70,10 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ ok: true });
   }
 
-  const chatId = startChatId(update);
+  const chatId = startChatId(update) ?? commandChatId(update, "menu") ?? commandChatId(update, "help");
   if (chatId !== undefined) {
     try {
-      await sendMessage({ chat_id: chatId, text: WELCOME_MESSAGE });
+      await sendMessage({ chat_id: chatId, text: commandChatId(update, "help") !== undefined ? HELP_TEXT : MENU_TEXT, reply_markup: MAIN_KEYBOARD });
     } catch {
       // A failed delivery must not be acknowledged as successful.
       return Response.json({ error: "Unable to send welcome message." }, { status: 502 });

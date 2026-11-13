@@ -66,7 +66,7 @@ test('SRS: transactional scheduling and personalized sessions', {
       await repo.bind(first.id, ++messageId, first.sendToken);
       for (const mode of ['LEARN', 'REVIEW']) {
         const result = await other.create(id, id, mode);
-        assert.equal(result.kind, 'message'); assert.match(result.message, /активное занятие LEARN/);
+        assert.equal(result.kind, 'message'); assert.match(result.message, /активное занятие изучения новых слов/);
       }
       assert.equal(await db.studySession.count({ where: { userId: BigInt(id), status: 'ACTIVE' } }), 1);
       const retry = await other.create(id, id, 'LEARN', 123);
@@ -86,7 +86,7 @@ test('SRS: transactional scheduling and personalized sessions', {
       assert.equal(review.total, 2); assert.equal(review.mode, 'REVIEW');
       for (const mode of ['REVIEW', 'LEARN']) {
         const resumed = await other.create(id, id, mode);
-        assert.equal(resumed.kind, 'message'); assert.match(resumed.message, /активное занятие REVIEW/);
+        assert.equal(resumed.kind, 'message'); assert.match(resumed.message, /активное занятие повторения/);
       }
       const reviewItems = await items(review);
       assert.deepEqual(new Set(reviewItems.map(i => i.wordId)), new Set(rows.slice(0, 2).map(i => i.wordId)));

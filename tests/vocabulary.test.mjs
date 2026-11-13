@@ -29,6 +29,7 @@ test('vocabulary normalization preserves phrases and rejects malformed, empty an
 test('vocabulary webhook authenticates sender, protects messages and binds translation prompts', async () => {
   process.env.TELEGRAM_WEBHOOK_SECRET = 'test_secret'; process.env.TELEGRAM_BOT_TOKEN = '123:test';
   const args = [], sent = [], bound = [];
+  mock.method(vocabularyStore, "delivered", async () => {});
   mock.method(vocabularyStore, 'process', async (...values) => { args.push(values); return { text: 'Перевод?', promptToken: 'a'.repeat(24) }; });
   mock.method(vocabularyStore, 'bindPrompt', async (...values) => { bound.push(values); });
   mock.method(globalThis, 'fetch', async (_url, options) => { sent.push(JSON.parse(options.body)); return Response.json({ ok: true, result: { message_id: 101, chat: { id: 42, type: 'private' } } }); });

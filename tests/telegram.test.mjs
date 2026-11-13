@@ -74,11 +74,12 @@ test("welcomes private /start commands including deep links and bot suffix", asy
   const body = JSON.parse(options.body);
   assert.equal(body.chat_id, 42);
   assert.match(body.text, /WordFlow/);
-  assert.match(body.text, /vocabulary/);
+  assert.match(body.text, /новыми словами/);
+  assert.equal(body.reply_markup.is_persistent, true);
 });
 test("ignores non-private chats, other commands, non-text and future updates", async () => {
   for (const body of [update("/start", "group"), update("/start", "supergroup"), update("/start", "channel"),
-    update("/started"), update("hello /start"), update("/help"), update(null),
+    update("/started"), update("hello /start"), update("/unknown"), update(null),
     { update_id: 1, future_update: {} }, { update_id: 1, edited_message: update().message }]) {
     // Non-text Telegram messages omit text rather than setting it to null.
     if (body.message?.text === null) delete body.message.text;
@@ -126,8 +127,10 @@ test("registration sends secret and message subscription without dropping update
     return Response.json({ ok: true, result: true });
   };
   await registerWebhook(config);
+  assert.ok(calls[1][0].endsWith("/setMyCommands"));
+  assert.ok(JSON.parse(calls[1][1].body).commands.some(c => c.command === "menu"));
   assert.deepEqual(JSON.parse(calls[0][1].body), {
-    url: config.TELEGRAM_WEBHOOK_URL, secret_token: secret, allowed_updates: ["message", "widget_query"],
+    url: config.TELEGRAM_WEBHOOK_URL, secret_token: secret, allowed_updates: ["message", "widget_query", "callback_query"],
   });
 });
 test("registration never exposes API or network errors", async () => {

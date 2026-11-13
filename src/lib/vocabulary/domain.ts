@@ -1,8 +1,10 @@
+import type { InlineKeyboardMarkup } from "../telegram/types";
+import { button } from "../telegram/navigation";
 export class VocabularyInputError extends Error {}
 export type VocabularyMode = "GENERAL" | "PERSONAL" | "MIXED";
-export type DraftData = { kind: "add" | "edit" | "delete" | "restore"; term: string; translation?: string; partOfSpeech: string; example: string | null; wordId?: string; versionId?: string };
-export type VocabularyResponse = { text: string; promptToken?: string };
-const commands = new Set(["add", "translation", "confirm", "cancel", "mywords", "edit", "example", "pos", "delete", "restore", "mode"]);
+export type DraftData = { kind: "add" | "edit" | "delete" | "restore"; term: string; awaiting?: "term" | "translation" | "pos" | "example"; translation?: string; partOfSpeech: string; example: string | null; wordId?: string; versionId?: string };
+export type VocabularyResponse = { text: string; promptToken?: string; keyboard?: InlineKeyboardMarkup; forceReply?: boolean; learn?: "LEARN" | "REVIEW"; deliveredMessageId?: number; replayed?: boolean };
+const commands = new Set(["add", "translation", "confirm", "cancel", "mywords", "edit", "example", "pos", "delete", "restore", "mode", "choose"]);
 export function vocabularyCommand(text: string): { name: string; args: string } | null {
   const match = /^\/([a-z]+)(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/.exec(text.trim());
   return match && commands.has(match[1]) ? { name: match[1], args: match[2] ?? "" } : null;
@@ -35,6 +37,7 @@ export function optionalField(value: string, field: "pos" | "example"): string |
   return text;
 }
 export function confirmation(data: DraftData, token: string): VocabularyResponse {
-  const title = data.kind === "delete" ? "Архивировать" : data.kind === "restore" ? "Восстановить" : "Сохранить";
-  return { text: `${title}: ${data.term}${data.translation ? ` — ${data.translation}` : ""}\n${data.partOfSpeech ? `Часть речи: ${data.partOfSpeech}\n` : ""}${data.example ? `Пример: ${data.example}\n` : ""}\nПодтвердить: /confirm ${token}\nОтмена: /cancel ${token}\nДействует 10 минут.`, promptToken: token };
+  const title = data.kind === "delete" ? "Архивировать слово?" : data.kind === "restore" ? "Восстановить слово?" : "Сохранить слово?";
+  return { text: `${title}\n\n${data.term}${data.translation ? ` — ${data.translation}` : ""}\n${data.partOfSpeech ? `Часть речи: ${data.partOfSpeech}\n` : ""}${data.example ? `Пример: ${data.example}\n` : ""}\nПодтверждение действует 10 минут.`, promptToken: token,
+    keyboard: { inline_keyboard: [[button(data.kind === "delete" ? "Архивировать" : data.kind === "restore" ? "Восстановить" : "Сохранить", `save:${token}`), button("Отмена", `cancel:${token}`)]] } };
 }

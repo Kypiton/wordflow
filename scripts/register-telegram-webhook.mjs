@@ -34,12 +34,27 @@ export async function registerWebhook(env = process.env) {
     const response = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, secret_token: secret, allowed_updates: ["message", "widget_query"] }),
+      body: JSON.stringify({ url, secret_token: secret, allowed_updates: ["message", "widget_query", "callback_query"] }),
       redirect: "error",
       signal: AbortSignal.timeout(10_000),
     });
     const body = await response.json();
     if (!response.ok || body?.ok !== true || body.result !== true) throw new Error();
+    const commands = await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, redirect: "error", signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify({ commands: [
+        { command: "start", description: "Начать знакомство с WordFlow" },
+        { command: "menu", description: "Главное меню" },
+        { command: "learn", description: "Учить новые слова" },
+        { command: "review", description: "Повторить слова" },
+        { command: "add", description: "Добавить своё слово" },
+        { command: "mywords", description: "Мой словарь" },
+        { command: "mode", description: "Выбрать словарь" },
+        { command: "help", description: "Как пользоваться ботом" },
+      ] }),
+    });
+    const registered = await commands.json();
+    if (!commands.ok || registered?.ok !== true || registered.result !== true) throw new Error();
   } catch {
     // Never print Telegram responses or fetch errors containing the token URL.
     throw new Error("Webhook registration failed. Check the bot credentials, public URL, and network connection.");

@@ -18,6 +18,16 @@ if (!allowed || process.env.WORDFLOW_DB_TESTS !== '1') {
   console.log('Dedicated test database not enabled. Set TEST_DATABASE_URL for the allowlisted Neon test branch and WORDFLOW_DB_TESTS=1.');
   process.exit(administration ? 1 : 0);
 }
+// Wake only the guarded disposable branch before testing the production-sized
+// connection budget. Do not retry tests or hide assertion/transaction failures.
+if (action === 'test') {
+  const { Client } = await import('pg');
+  const client = new Client({ connectionString: url, connectionTimeoutMillis: 10000, query_timeout: 5000 });
+  try { await client.connect(); await client.query('SELECT 1'); }
+  catch { console.error('Test database warm-up failed. Check the dedicated branch connection.'); process.exitCode = 1; }
+  finally { await client.end().catch(() => {}); }
+  if (process.exitCode) process.exit(process.exitCode);
+}
 const env = { ...process.env, DATABASE_URL: url, DIRECT_URL: url, TEST_DATABASE_URL: url };
 const args = administration
   ? ['node_modules/prisma/build/index.js', 'migrate', action === 'status' ? 'status' : 'deploy']

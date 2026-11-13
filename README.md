@@ -2,6 +2,21 @@
 
 Telegram-first English vocabulary practice with Next.js App Router, TypeScript, PostgreSQL/Prisma 7, and Telegram Bot API HTML widgets. `/start` welcomes learners, `/learn` introduces new words, and `/review` practices words scheduled by a simple personalized SRS. Answers, reveals, navigation, and completion stay in the lavender widget.
 
+## Menu-driven Telegram navigation (Task #6.1)
+
+`/start` and `/menu` show a persistent Russian reply keyboard: **📚 Учить слова**, **🔁 Повторить**, **📖 Мой словарь**, **➕ Добавить слово**, **⚙️ Настройки**. `/help` explains the app in Russian. The reply keyboard keeps the menu accessible on mobile and desktop; inline keyboards handle actions tied to a particular message. Clients may let users collapse the keyboard; `/menu` opens it again.
+
+- **Add:** tap Добавить слово → reply to the English-word prompt → reply to the Russian-translation prompt → tap **Сохранить** or **Отмена**. Replies must reference the current bot prompt, so unrelated conversation is ignored. `/add overwhelmed — перегруженный` skips directly to the same button confirmation. No token copying is needed. Saved words offer Add another, Learn my words, and My dictionary.
+- **Learn:** tap Учить слова and select **Общий словарь**, **Мои слова**, or **Все слова**. The choice is saved and learning starts. Settings changes the same preference without starting a session. An existing session is resumed without replacing its word list; the chosen preference applies to the next session. Learn my words saves PERSONAL through the same transaction and session rules.
+- **Dictionary:** open a five-entry page, select a word, then edit its translation/example/part of speech or explicitly confirm archive/restore. Edits and archive/restore return to the appropriate list. Ordering is stable by creation time and ID; edits do not reorder words. Pages are live: additions/archiving can change page contents, but buttons reference immutable collection IDs and are always owner-checked, never positional word numbers.
+- **Personal cards:** Показать перевод → **Вспомнил / Не вспомнил**. Reveal alone still gives no credit. Completion and empty states point back to navigation; scheduling is unchanged.
+
+Callback payloads use a bounded `v1:` format (at most 64 bytes), opaque IDs/tokens, and no vocabulary text. Every valid callback is acknowledged with `answerCallbackQuery` before database work. Confirmation requires the current draft, unexpired token, private owner and bound Telegram message. Edited/deleted/inaccessible/shared/forwarded contexts fail safely. Navigation normally edits its source message; guided input uses a protected ForceReply prompt.
+
+No schema migration is required. Existing `VocabularyReceipt` rows store callback results in a **negative message-ID namespace**, derived from a 60-bit callback-ID hash; positive IDs remain ordinary Telegram messages. The fingerprint includes the full callback ID, data and source message, so hash collisions fail closed. Delivery IDs suppress completed webhook retries. Duplicate concurrent saves serialize under the existing user lock; mutation and receipt commit together. Learning callbacks use a separate high positive command-ID range with the existing quiz send lease. A crash between Telegram delivery and recording delivery may still duplicate a guided prompt; it cannot duplicate a saved word or study credit. The existing 20-management-actions/minute limit includes navigation.
+
+Run `npm run telegram:webhook` **manually** after deploying: it now subscribes to `callback_query` as well as messages/widgets, and registers Russian command descriptions using `setMyCommands`. It preserves pending updates. This changes the selected bot's webhook and command menu; use a separate development bot for testing. No registration or deployment runs automatically.
+
 ## Personal vocabulary
 
 All management commands work only in the private chat with WordFlow. No translation service or fabricated distractors are used.
@@ -10,7 +25,7 @@ All management commands work only in the private chat with WordFlow. No translat
 | --- | --- |
 | `/add word` | `/add overwhelmed` asks for a Russian translation. Reply **to that bot prompt**, or send `/translation подавленный`. Unsolicited chat messages are ignored. |
 | `/add word — перевод` | `/add overwhelmed — подавленный` opens a confirmation immediately. A spaced en/em dash or ` - ` separates the fields. |
-| `/confirm CODE` / `/cancel CODE` | Copy the 24-character code shown in the latest confirmation. The draft expires after 10 minutes. Starting another add/edit replaces the previous draft. Nothing is saved before confirmation. |
+| Save / Cancel buttons | Tap the inline confirmation. Drafts expire after 10 minutes; starting another add/edit replaces the previous draft. Nothing is saved before confirmation. `/cancel` also cancels a guided draft. |
 | `/mywords` | Five active words per page, total collection size, translation, optional part of speech, and current-version SRS state. `/mywords 2` opens page 2; `/mywords archived 1` browses the archive. |
 | `/edit word` | Requests a new translation; `/edit overwhelmed — перегруженный` also works. Confirmation is required. |
 | `/pos word — value` | `/pos overwhelmed — adjective`; `-` clears the optional field. Confirm before saving. |
@@ -33,9 +48,9 @@ Use `/mode PERSONAL`, `/mode GENERAL`, or `/mode MIXED`. The preference is persi
 
 ### Personal self-review
 
-The same lavender widget supports both built-in multiple choice and personal recall cards, including mixed sessions. A recall card shows the English term and optional part of speech without embedding the translation in initial HTML. Try recalling it, then select **Показать ответ**. The server records the reveal and returns the translation and optional example. Only then can **Помню** or **Не помню** be submitted. Self-ratings before reveal and multiple-choice actions against a recall card are rejected.
+The same lavender widget supports both built-in multiple choice and personal recall cards, including mixed sessions. A recall card shows the English term and optional part of speech without embedding the translation in initial HTML. Try recalling it, then select **Показать перевод**. The server records the reveal and returns the translation and optional example. Only then can **Вспомнил** or **Не вспомнил** be submitted. Self-ratings before reveal and multiple-choice actions against a recall card are rejected.
 
-Reveal alone does not complete a personal attempt or award SRS credit. **Помню** records a successful self-rated attempt and uses the normal correct-answer intervals; **Не помню** records a lapse due in ten minutes. Abandoning a revealed card records no attempt; resume restores its revealed state until expiry. The explicit self-rating is stored separately from a multiple-choice selection. User ownership, reveal state, attempt uniqueness, scheduling, receipts and session advancement are checked/committed in the same transaction. Self-review necessarily relies on honest recall reporting; it is not an objectively graded translation test. Ordinary multiple-choice Reveal retains its previous unsuccessful-attempt behavior.
+Reveal alone does not complete a personal attempt or award SRS credit. **Вспомнил** records a successful self-rated attempt and uses the normal correct-answer intervals; **Не вспомнил** records a lapse due in ten minutes. Abandoning a revealed card records no attempt; resume restores its revealed state until expiry. The explicit self-rating is stored separately from a multiple-choice selection. User ownership, reveal state, attempt uniqueness, scheduling, receipts and session advancement are checked/committed in the same transaction. Self-review necessarily relies on honest recall reporting; it is not an objectively graded translation test. Ordinary multiple-choice Reveal retains its previous unsuccessful-attempt behavior.
 
 ### Immutable edits and history
 
@@ -46,7 +61,7 @@ Reveal alone does not complete a personal attempt or award SRS credit. **Пом�
 - `/learn`: selects up to 10 distinct words the user has never answered or revealed. Due reviews are **not** mixed in. New word order is randomized and stored in PostgreSQL.
 - `/review`: selects up to 10 distinct words with `dueAt <=` current database time, oldest due first. If none are due, the bot says there are currently no scheduled reviews; it does not claim the user has no learned words.
 - Fewer than 10 available words produce a shorter session with an explicit caption and accurate counters. Exhausted new vocabulary produces a friendly `/review` suggestion.
-- One active session per user. Repeating either command while a bound session exists sends instructions to use **«Продолжить занятие»** in its existing widget. It does not send a second widget or change the mode. A cross-mode command asks the user to finish the active LEARN/REVIEW session first. The mode is displayed in the widget.
+- One active session per user. Repeating either command while a bound session exists sends instructions to use **«Продолжить занятие»** in its existing widget. It does not send a second widget or change the mode. A cross-mode command asks the user to finish the active LEARN/REVIEW session first. The widget labels learning and review in Russian.
 - Sessions expire after 30 minutes, without extending expiry on resume. Completed or expired sessions allow a new session. Previously recorded answers and SRS progress are retained.
 - For built-in multiple choice, revealing consumes that question as an unsuccessful attempt. After answering, the correct option is shown; Next advances to the first unanswered question. Completion shows correct/incorrect totals and rounded accuracy for the actual session size.
 
@@ -76,7 +91,7 @@ Migration **`20261112000000_spaced_repetition`** adds:
 - An index on `(userId, dueAt)` for due selection, word index, foreign keys, and nonnegative/time-order constraints.
 - A relaxed completion check permitting 1–10 questions. Existing rows are not rewritten.
 
-**Historical backfill decision:** the migration bootstraps one progress row from the latest historical attempt per user/word. A correct, non-revealed selection starts at repetition 1 and is due one day after that attempt. Incorrect/revealed attempts start at repetition 0, lapse 1, due ten minutes after that attempt. This deliberately does not infer a historical streak or lifetime lapse count. Old overdue attempts remain due immediately. The migration never updates or deletes existing `ReviewAttempt`, `SessionItem`, word, or session records. Existing unexpired LEGACY widgets and action formats remain usable; legacy sessions default to LEARN. Historical receipts replay without scheduling again.
+**Historical backfill decision:** the migration bootstraps one progress row from the latest historical attempt per user/word. A correct, non-revealed selection starts at repetition 1 and is due one day after that attempt. Incorrect/revealed attempts start at repetition 0, lapse 1, due ten minutes after that attempt. This deliberately does not infer a historical streak or lifetime lapse count. Old overdue attempts remain due immediately. The migration never updates or deletes existing `ReviewAttempt`, `SessionItem`, word, or session records. Existing unexpired LEGACY widgets and action formats remain usable; legacy sessions default to LEARN. Historical receipts replay without scheduling again. Legacy typed confirmations remain accepted for compatibility, but are not advertised in the new UI.
 
 ### Atomicity and delivery
 
@@ -129,7 +144,7 @@ With a development bot and a public HTTPS tunnel/deployment:
 npm run telegram:webhook
 ```
 
-This explicitly changes that bot's webhook, subscribes to `message` and `widget_query`, preserves pending updates, and rejects localhost/IP URLs. Widgets use native `sendWidget` with `allow_queries: true`, synchronous `TelegramWidget.request()` clicks and `answerWidgetQuery` data updates. No Mini App or external widget network calls are used.
+This explicitly changes that bot's webhook, subscribes to `message`, `widget_query`, and `callback_query`, preserves pending updates, and rejects localhost/IP URLs. Widgets use native `sendWidget` with `allow_queries: true`, synchronous `TelegramWidget.request()` clicks and `answerWidgetQuery` data updates. No Mini App or external widget network calls are used.
 
 ## Verification
 
@@ -165,7 +180,7 @@ The unit/widget suite covers scheduling transitions, UTC boundaries, due compari
    WORDFLOW_DB_TESTS=1 npm run test:db
    ```
 
-   Tests seed the shared vocabulary idempotently and create random synthetic users. Cleanup removes only synthetic users and their personal entries, progress, receipts, attempts and sessions; shared seed vocabulary is retained. The suite tests concurrent/repeated answers, independent clients, rollback, authorization, expiry, active-session conflicts, new-only selection, shorter sessions, completion, due-only review selection, private management, immutable edits, pagination, mode isolation, and reveal/rating atomicity.
+   A read-only `SELECT 1` warm-up uses a ten-second connection budget for the allowlisted test branch before running the tests; application connection timeouts remain unchanged. Tests seed the shared vocabulary idempotently and create random synthetic users. Cleanup removes only synthetic users and their personal entries, progress, receipts, attempts and sessions; shared seed vocabulary is retained. The suite tests concurrent/repeated answers, independent clients, rollback, authorization, expiry, active-session conflicts, new-only selection, shorter sessions, completion, due-only review selection, private management, immutable edits, pagination, mode isolation, and reveal/rating atomicity.
 4. To test due selection immediately, the suite changes `dueAt` and `lastReviewedAt` only on its synthetic test user's progress rows. It does **not** change the database clock. For a manual Telegram test, use a separate development bot and test deployment pointing to this branch, reveal a word, finish/expire the session, wait ten minutes, then use `/review`. Alternatively adjust only that test account's due timestamps in the test branch, keeping `dueAt >= lastReviewedAt`.
 5. Smoke-test `/start`; `/learn`; same-mode resume; `/review` during LEARN; answer/reveal and Next; completion; `/review` with none due and with due words; rapid duplicate clicks; restart the development server and resume. Confirm one attempt per question and one progress row per user/word.
 
@@ -199,3 +214,8 @@ Task #6 verification: all 43 unit/widget tests and all 24 reported Neon integrat
 
 
 Telegram API reference: [protected messages and sendWidget](https://core.telegram.org/bots/api#sendwidget), [widget sandbox and payload limits](https://core.telegram.org/bots/widgets). Personal content is never sent as shared/public widget data; incoming forwarded/shared query contexts are rejected. Protection does not prevent a recipient from manually copying or photographing their own content.
+
+
+Task #6.1 manual smoke test (development bot/test branch): open `/start` on desktop and mobile; add a word entirely through prompts/buttons; double-tap Save; browse page/detail; edit; archive and restore; choose My words; finish a recall session; check an active session survives a settings change; try an expired button; return through `/menu`. Also verify legacy `/learn`, `/review`, `/add word — перевод`, and `/mode PERSONAL`. Do not change production data to force due reviews.
+
+Official navigation APIs: [reply keyboards](https://core.telegram.org/bots/api#replykeyboardmarkup), [callback acknowledgement](https://core.telegram.org/bots/api#answercallbackquery), [message editing](https://core.telegram.org/bots/api#editmessagetext), [command registration](https://core.telegram.org/bots/api#setmycommands).

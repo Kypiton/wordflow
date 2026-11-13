@@ -1,6 +1,7 @@
 /** Minimal Bot API shapes used by WordFlow; unknown update fields are allowed. */
 export interface TelegramMessage {
   message_id: number;
+  date?: number;
   chat: { id: number; type: string };
   text?: string;
   reply_to_message?: { message_id: number };
@@ -13,12 +14,14 @@ export interface TelegramUpdate {
   message?: TelegramMessage;
   // Parse separately so a query with a usable id can receive a safe error.
   widget_query?: unknown;
+  callback_query?: unknown;
 }
 
 export interface SendMessageRequest {
   chat_id: number;
   text: string;
   protect_content?: true;
+  reply_markup?: InlineKeyboardMarkup | ReplyKeyboardMarkup | { force_reply: true; selective?: boolean };
 }
 
 export interface SendWidgetRequest {
@@ -83,6 +86,18 @@ export function isTelegramMessage(value: unknown): value is TelegramMessage {
 export function isTelegramUpdate(value: unknown): value is TelegramUpdate {
   return isRecord(value) && Number.isSafeInteger(value.update_id) &&
     (value.update_id as number) >= 0 &&
-    !(value.message !== undefined && value.widget_query !== undefined) &&
+    [value.message, value.widget_query, value.callback_query].filter(part => part !== undefined).length <= 1 &&
     (value.message === undefined || isTelegramMessage(value.message));
+}
+
+export type InlineKeyboardMarkup = { inline_keyboard: { text: string; callback_data: string }[][] };
+export type ReplyKeyboardMarkup = { keyboard: { text: string }[][]; resize_keyboard: true; is_persistent: true };
+export type EditMessageTextRequest = { chat_id: number; message_id: number; text: string; reply_markup?: InlineKeyboardMarkup };
+export type AnswerCallbackQueryRequest = { callback_query_id: string; text?: string; show_alert?: boolean };
+export type PrivateCallbackQuery = { id: string; from: { id: number; is_bot: false }; message: TelegramMessage; data: string };
+export function isPrivateCallbackQuery(value: unknown): value is PrivateCallbackQuery {
+  return isRecord(value) && isQueryId(value.id) && isRecord(value.from) && isPositiveId(value.from.id) && value.from.is_bot === false &&
+    isTelegramMessage(value.message) && value.message.date !== 0 && value.message.forward_origin === undefined &&
+    value.message.chat.type === "private" && value.message.chat.id === value.from.id && isPositiveId(value.message.message_id) &&
+    value.inline_message_id === undefined && typeof value.data === "string" && Buffer.byteLength(value.data) <= 64;
 }

@@ -893,7 +893,7 @@ test('resume/conflict and no-new-word messages never send a duplicate widget', a
 
 test('small REVIEW sessions render their real total, mode, and completion counter', async () => {
   const html = quizWidgetHtml('a'.repeat(24), initialContent, { mode: 'REVIEW', total: 3, position: 0 });
-  assert.match(html, /id="mode">REVIEW/);
+  assert.match(html, /id="mode">Повторение/);
   assert.match(html, /01 \/ 03/);
   assert.ok(deflateSync(html, { level: 9 }).length < 4096);
   const ui = widgetHarness({ viewer: {}, ready() {}, request: () => Promise.resolve({ result: JSON.stringify({ status: 'completed', mode: 'REVIEW', revision: 3, total: 3, correctCount: 2, incorrectCount: 1, accuracy: 67 }) }) });

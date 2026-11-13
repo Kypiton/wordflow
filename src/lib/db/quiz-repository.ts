@@ -6,6 +6,7 @@ import { getDatabase } from "./prisma";
 import type { PrivateWidgetQuery } from "../telegram/types";
 import { isPrivateWidgetQuery, isPositiveId } from "../telegram/types";
 import { expiredQuiz, invalidQuiz, parseSessionAction, quizFeedback } from "../telegram/quiz-domain";
+import { MODE_LABELS } from "../telegram/navigation";
 import { scheduleReview } from "../srs/scheduler";
 import type { Feedback, QuizContent, SessionMode } from "../telegram/quiz-domain";
 
@@ -89,7 +90,7 @@ export class PrismaQuizRepository implements QuizRepository {
           a.progress[0].dueAt.getTime() - b.progress[0].dueAt.getTime() || a.id.localeCompare(b.id))).slice(0, WORD_COUNT);
         if (!chosen.length) return { kind: "message", message: mode === "REVIEW"
           ? "Сейчас нет запланированных повторений. Загляните позже — слова появятся, когда подойдёт время."
-          : `Новых слов пока нет в режиме ${owner.vocabularyMode}. /add word — перевод · /mode · /review.` };
+          : `Новых слов пока нет в режиме ${MODE_LABELS[owner.vocabularyMode]}. Выберите другое действие ниже.` };
         session = await tx.studySession.create({ data: {
           id: randomBytes(12).toString("hex"), userId: user, chatId: user, mode, vocabularyMode: owner.vocabularyMode, status: "ACTIVE",
           expiresAt: new Date(clock.now.getTime() + SESSION_DURATION_MS),
@@ -99,7 +100,7 @@ export class PrismaQuizRepository implements QuizRepository {
       }
       if (requestId !== undefined && !request) await tx.learnRequest.create({ data: { userId: user, messageId: BigInt(requestId), sessionId: session.id } });
       if (session.messageId !== null) return { kind: "message", message:
-        `${session.mode === mode ? "Продолжим" : "Сначала завершите"} активное занятие ${session.mode}. Нажмите «Продолжить занятие» в его виджете выше. Новое занятие не создано.` };
+        `${session.mode === mode ? "Продолжим" : "Сначала завершите"} активное занятие ${session.mode === "LEARN" ? "изучения новых слов" : "повторения"}. Нажмите «Продолжить занятие» в его виджете выше. Новое занятие не создано.` };
       if (session.sendLeaseUntil && session.sendLeaseUntil > clock.now) return { kind: "message", message: "Виджет уже отправляется. Если он не появился, повторите команду через 30 секунд." };
       const sendToken = randomBytes(12).toString("hex");
       await tx.studySession.update({ where: { id: session.id }, data: { sendToken, sendLeaseUntil: new Date(clock.now.getTime() + 30_000) } });

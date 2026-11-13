@@ -43,7 +43,7 @@ export function startChatId(update: TelegramUpdate): number | undefined {
   return commandChatId(update, "start");
 }
 
-export function commandChatId(update: TelegramUpdate, command: "start" | "learn" | "review"): number | undefined {
+export function commandChatId(update: TelegramUpdate, command: "start" | "learn" | "review" | "menu" | "help"): number | undefined {
   const message = update.message;
   if (message?.chat.type !== "private" || !message.text) return undefined;
   // Accept deep-link arguments and Telegram's /command@bot form.
@@ -52,8 +52,4 @@ export function commandChatId(update: TelegramUpdate, command: "start" | "learn"
     : undefined;
 }
 
-export const WELCOME_MESSAGE =
-  "Welcome to WordFlow! 👋\n\n" +
-  "WordFlow is your English vocabulary learning app, right here in Telegram. " +
-  "Build your vocabulary with new words and short practice sessions.\n\n" +
-  "Send /learn for new words or /review for scheduled practice!\n\nЛичный словарь: /add word — перевод · /mywords · /mode";
+export { MENU_TEXT as WELCOME_MESSAGE } from "./navigation";

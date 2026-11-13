@@ -3,7 +3,7 @@ import "server-only";
 import { deflateSync } from "node:zlib";
 
 import { isRecord, isTelegramMessage } from "./types";
-import type { AnswerWidgetQueryRequest, SendWidgetRequest, SendMessageRequest, TelegramMessage } from "./types";
+import type { EditMessageTextRequest, AnswerCallbackQueryRequest, AnswerWidgetQueryRequest, SendWidgetRequest, SendMessageRequest, TelegramMessage } from "./types";
 
 export class TelegramApiError extends Error {
   constructor() {
@@ -15,8 +15,8 @@ export class TelegramApiError extends Error {
 }
 
 async function callApi<T>(
-  method: "sendMessage" | "sendWidget" | "answerWidgetQuery",
-  request: SendMessageRequest | SendWidgetRequest | AnswerWidgetQueryRequest,
+  method: "sendMessage" | "sendWidget" | "answerWidgetQuery" | "editMessageText" | "answerCallbackQuery",
+  request: SendMessageRequest | SendWidgetRequest | AnswerWidgetQueryRequest | EditMessageTextRequest | AnswerCallbackQueryRequest,
   validate: (value: unknown) => value is T,
   timeoutMs = 10_000,
 ): Promise<T> {
@@ -35,6 +35,8 @@ async function callApi<T>(
       signal: AbortSignal.timeout(timeoutMs),
     });
     const body: unknown = await response.json();
+    if (method === "editMessageText" && isRecord(body) && body.error_code === 400 &&
+        typeof body.description === "string" && body.description.startsWith("Bad Request: message is not modified")) return true as T;
     if (!response.ok || !isRecord(body) || body.ok !== true || !validate(body.result)) {
       throw new TelegramApiError();
     }
@@ -60,4 +62,11 @@ export function answerWidgetQuery(request: AnswerWidgetQueryRequest): Promise<tr
   if (Buffer.byteLength(request.data, "utf8") > 1024) throw new TelegramApiError();
   // No retries or other network calls ahead of the time-sensitive answer.
   return callApi("answerWidgetQuery", request, (value): value is true => value === true, 5_000);
+}
+
+export function editMessageText(request: EditMessageTextRequest): Promise<TelegramMessage | true> {
+  return callApi("editMessageText", request, (value): value is TelegramMessage | true => value === true || isTelegramMessage(value));
+}
+export function answerCallbackQuery(request: AnswerCallbackQueryRequest): Promise<true> {
+  return callApi("answerCallbackQuery", request, (value): value is true => value === true, 3000);
 }

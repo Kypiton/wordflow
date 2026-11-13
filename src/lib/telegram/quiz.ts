@@ -1,6 +1,7 @@
 import "server-only";
 
 import { answerWidgetQuery, sendWidget, sendMessage } from "./client";
+import { EMPTY_ACTIONS } from "./navigation";
 import { quizWidgetHtml } from "./quiz-widget";
 import { isPrivateWidgetQuery, isQueryId, isRecord } from "./types";
 import { PrismaQuizRepository } from "../db/quiz-repository";
@@ -14,14 +15,14 @@ export const quizStore: QuizRepository = new PrismaQuizRepository();
 export async function sendQuiz(userId: number, chatId: number, mode: SessionMode = "LEARN", requestId?: number): Promise<void> {
   const start = await quizStore.create(userId, chatId, mode, requestId);
   if (start.kind === "message") {
-    await sendMessage({ chat_id: chatId, text: start.message });
+    await sendMessage({ chat_id: chatId, text: start.message, reply_markup: EMPTY_ACTIONS });
     return;
   }
   const { id, content } = start;
   try {
     const message = await sendWidget({
       chat_id: chatId, html: quizWidgetHtml(id, content, { mode: start.mode ?? mode, total: start.total ?? 10, position: start.position ?? 0 }), allow_queries: true, protect_content: true,
-      caption: start.notice ?? `WordFlow · ${start.mode ?? mode}`,
+      caption: start.notice ?? `WordFlow · ${(start.mode ?? mode) === "LEARN" ? "Новые слова" : "Повторение"}`,
     });
     if (message.chat.id !== chatId || message.chat.type !== "private" || message.message_id <= 0) {
       throw new Error("Invalid widget response.");
