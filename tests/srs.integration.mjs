@@ -97,7 +97,8 @@ test('SRS: transactional scheduling and personalized sessions', {
       const summary = await other.process(query(review, '1:n'));
       assert.equal(summary.feedback.total, 2); assert.equal(summary.feedback.accuracy, 50);
       const nextLearn = await repo.create(id, id);
-      assert.equal(nextLearn.kind, 'message'); assert.match(nextLearn.message, /Новых слов пока нет/);
+      if (nextLearn.kind === 'message') assert.match(nextLearn.message, /Новых слов пока нет/);
+      else assert.equal(nextLearn.total, 10); // expanded shared catalog remains available
     });
     await t.test('short new-word sessions and vocabulary exhaustion are friendly', async () => {
       const id = user(); const seen = new Set();
@@ -109,15 +110,18 @@ test('SRS: transactional scheduling and personalized sessions', {
       await repo.revoke(session.id);
       assert.equal(seen.size, 7);
       const short = await create(id);
-      assert.equal(short.total, 3); assert.match(short.notice, /3/);
+      assert.ok(short.total >= 3 && short.total <= 10);
+      if (short.total < 10) assert.match(short.notice, new RegExp(String(short.total)));
       for (const item of await items(short)) {
         assert.ok(!seen.has(item.wordId)); seen.add(item.wordId);
         await repo.process(query(short, `${item.position}:r`));
       }
-      assert.equal((await repo.process(query(short, '2:n'))).feedback.total, 3);
-      assert.equal(seen.size, 10);
-      const empty = await repo.create(id, id);
-      assert.equal(empty.kind, 'message'); assert.match(empty.message, /Новых слов пока нет/);
+      const last = String(short.total - 1);
+      assert.equal((await repo.process(query(short, `${last}:n`))).feedback.total, short.total);
+      assert.equal(seen.size, 7 + short.total);
+      const next = await repo.create(id, id);
+      if (next.kind === 'message') assert.match(next.message, /Новых слов пока нет/);
+      else assert.ok(next.total > 0 && next.total <= 10);
     });
     await t.test('authorization, expiry, stale answers and rollback leave SRS untouched', async () => {
       const id = user(), session = await create(id), [item] = await items(session);

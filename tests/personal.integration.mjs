@@ -89,7 +89,8 @@ test('Personal vocabulary: ownership, immutable history and self-review', { skip
       const mixed = await create(id); const mixedRows = await rows(mixed);
       assert.equal(mixed.total, 10); assert.equal(new Set(mixedRows.map(i => i.word.term.toLowerCase())).size, 10);
       assert.ok(mixedRows.every(i => i.word.term !== 'secret phrase'));
-      assert.ok(mixedRows.some(i => i.word.personalWordId));
+      assert.ok(mixedRows.some(i => i.word.personalWordId), 'MIXED should include available personal words even with a large general catalog');
+      assert.ok(mixedRows.some(i => !i.word.personalWordId), 'MIXED should include available general words');
       await quiz.revoke(mixed.id);
       await confirm(id, '/delete personal phrase'); await confirm(id, '/delete Reluctant'); await cmd(id, '/mode PERSONAL');
       assert.equal((await quiz.create(id, id)).kind, 'message');

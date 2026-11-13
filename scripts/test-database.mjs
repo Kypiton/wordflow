@@ -31,7 +31,7 @@ if (action === 'test') {
 const env = { ...process.env, DATABASE_URL: url, DIRECT_URL: url, TEST_DATABASE_URL: url };
 const args = administration
   ? ['node_modules/prisma/build/index.js', 'migrate', action === 'status' ? 'status' : 'deploy']
-  : ['--conditions=react-server', '--test', '--test-concurrency=1', 'tests/database.integration.mjs', 'tests/srs.integration.mjs', 'tests/personal.integration.mjs'];
+  : ['--conditions=react-server', '--test', '--test-concurrency=1', 'tests/database.integration.mjs', 'tests/srs.integration.mjs', 'tests/personal.integration.mjs', 'tests/catalog.integration.mjs'];
 const result = spawnSync(process.execPath, args, { env, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
 const clean = value => String(value ?? '').split(url).join('[database URL]').replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, '[database URL]');
 process.stdout.write(clean(result.stdout));

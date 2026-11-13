@@ -22,8 +22,8 @@ export interface QuizRepository {
   delivered(id: string): Promise<void>;
 }
 
-function contentOf(word: { term: string; partOfSpeech: string; personalWordId: string | null; options: { text: string }[] }): QuizContent {
-  return { term: word.term, partOfSpeech: word.partOfSpeech, options: word.options.map(o => o.text), ...(word.personalWordId ? { kind: "self" as const } : {}) };
+function contentOf(word: { term: string; partOfSpeech: string; personalWordId: string | null; example?: string | null; options: { text: string }[] }): QuizContent {
+  return { term: word.term, partOfSpeech: word.partOfSpeech, options: word.options.map(o => o.text), ...(word.personalWordId ? { kind: "self" as const } : word.example ? { example: word.example } : {}) };
 }
 const WORD_COUNT = 10;
 const SESSION_DURATION_MS = 30 * 60_000;
@@ -74,9 +74,9 @@ export class PrismaQuizRepository implements QuizRepository {
       if (!session) {
         const words = await tx.word.findMany({
           where: { isCurrent: true, AND: [
-            owner.vocabularyMode === "GENERAL" ? { personalWordId: null }
+            owner.vocabularyMode === "GENERAL" ? { personalWordId: null, ...(owner.cefrLevel ? { cefrLevel: owner.cefrLevel } : {}) }
               : owner.vocabularyMode === "PERSONAL" ? { personalWord: { ownerId: user, archivedAt: null } }
-              : { OR: [{ personalWordId: null }, { personalWord: { ownerId: user, archivedAt: null } }] },
+              : { OR: [{ personalWordId: null, ...(owner.cefrLevel ? { cefrLevel: owner.cefrLevel } : {}) }, { personalWord: { ownerId: user, archivedAt: null } }] },
             mode === "REVIEW"
               ? { progress: { some: { userId: user, dueAt: { lte: clock.now } } } }
               : { progress: { none: { userId: user } }, items: { none: { session: { userId: user }, attempt: { isNot: null } } } },
@@ -84,15 +84,40 @@ export class PrismaQuizRepository implements QuizRepository {
           include: { options: { orderBy: { position: "asc" } }, progress: { where: { userId: user } } },
         });
         const valid = words.filter(word => word.personalWordId ? Boolean(word.translation) && word.options.length === 0 : word.options.length === 4 && word.options.filter(o => o.isCorrect).length === 1 && word.options.every((o, i) => o.position === i));
-        valid.sort((a, b) => Number(Boolean(a.personalWordId)) - Number(Boolean(b.personalWordId)));
-        const unique = Array.from(new Map(valid.map(word => [word.term.toLowerCase(), word])).values());
-        const chosen = (mode === "LEARN" ? shuffle(unique) : unique.sort((a, b) =>
-          a.progress[0].dueAt.getTime() - b.progress[0].dueAt.getTime() || a.id.localeCompare(b.id))).slice(0, WORD_COUNT);
+        // Prefer the user's own version when a personal term also exists in the
+        // global catalog. Both versions must never appear in the same session.
+        const byTerm = new Map<string, (typeof valid)[number]>();
+        for (const word of valid) {
+          const key = word.term.toLowerCase();
+          const previous = byTerm.get(key);
+          if (!previous || (word.personalWordId && !previous.personalWordId)) byTerm.set(key, word);
+        }
+        const unique = Array.from(byTerm.values());
+        const byDue = (a: (typeof valid)[number], b: (typeof valid)[number]) =>
+          a.progress[0].dueAt.getTime() - b.progress[0].dueAt.getTime() || a.id.localeCompare(b.id);
+        const ordered = mode === "LEARN" ? shuffle(unique) : unique.sort(byDue);
+        let chosen: typeof valid;
+        if (owner.vocabularyMode === "MIXED") {
+          // Reserving slots prevents a large shared catalog from crowding out
+          // personal words. Fill unused slots from either side when necessary.
+          const personal = ordered.filter(word => word.personalWordId !== null);
+          const general = ordered.filter(word => word.personalWordId === null);
+          const personalQuota = Math.min(Math.ceil(WORD_COUNT / 2), personal.length);
+          const generalQuota = Math.min(WORD_COUNT - personalQuota, general.length);
+          chosen = [...personal.slice(0, personalQuota), ...general.slice(0, generalQuota)];
+          if (chosen.length < WORD_COUNT) {
+            const selected = new Set(chosen.map(word => word.id));
+            chosen.push(...ordered.filter(word => !selected.has(word.id)).slice(0, WORD_COUNT - chosen.length));
+          }
+          chosen = mode === "LEARN" ? shuffle(chosen) : chosen.sort(byDue);
+        } else {
+          chosen = ordered.slice(0, WORD_COUNT);
+        }
         if (!chosen.length) return { kind: "message", message: mode === "REVIEW"
           ? "Сейчас нет запланированных повторений. Загляните позже — слова появятся, когда подойдёт время."
-          : `Новых слов пока нет в режиме ${MODE_LABELS[owner.vocabularyMode]}. Выберите другое действие ниже.` };
+          : `Новых слов пока нет в режиме ${MODE_LABELS[owner.vocabularyMode]}${owner.cefrLevel && owner.vocabularyMode !== "PERSONAL" ? ` (${owner.cefrLevel})` : ""}. Выберите другой уровень или словарь в настройках.` };
         session = await tx.studySession.create({ data: {
-          id: randomBytes(12).toString("hex"), userId: user, chatId: user, mode, vocabularyMode: owner.vocabularyMode, status: "ACTIVE",
+          id: randomBytes(12).toString("hex"), userId: user, chatId: user, mode, vocabularyMode: owner.vocabularyMode, cefrLevel: owner.cefrLevel, status: "ACTIVE",
           expiresAt: new Date(clock.now.getTime() + SESSION_DURATION_MS),
           items: { create: chosen.map((word, position) => ({ wordId: word.id, position })) },
         }, include });

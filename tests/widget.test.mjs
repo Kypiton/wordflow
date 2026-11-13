@@ -567,7 +567,7 @@ function widgetHarness(bridge, content = initialContent) {
       'score',
       'details',
       'remembered', 'forgot', 'counter',
-      'progress',
+      'progress', 'example',
     ].map(id => [id, element()]),
   );
 

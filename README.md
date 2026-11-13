@@ -56,6 +56,26 @@ Reveal alone does not complete a personal attempt or award SRS credit. **Всп�
 
 `PersonalWord` owns the normalized key and archive state. Its `Word` rows are immutable content versions; only one can be current. Personal words have a translation and no `WordOption` distractors. Each confirmed edit (including example/part-of-speech changes) creates a new version. Existing sessions continue with their original version, translation, and SRS history; the new version starts NEW. This deliberately avoids silently carrying mastery to changed content. Archive/restore only changes eligibility for **future** sessions; an existing bound session can still finish its snapshot. Restoration re-enables the current version's existing SRS schedule.
 
+## Task #7 — Expanded CEFR vocabulary (303 entries)
+
+**What is included.** The shared catalog now contains **303 distinct English entries**: 250 new curated entries (50 each in approximate A1, A2, B1, B2, C1 bands), the existing 50-word editorial list, and 3 original seed words not in that list. Each entry has an English term, part of speech, one selected Russian meaning, and an original English usage sentence. New shared multiple-choice questions have four fixed choices, one correct and three distinct same-part-of-speech distractors. The existing ten published cards, their word IDs and correct/incorrect options are preserved. These are teaching-level labels, **not official per-word CEFR certifications**; some words span multiple levels or senses.
+
+**Commands and buttons.** Open **⚙️ Настройки → 🎯 Уровень английского**, or send `/level`, and select **Все уровни / A1 / A2 / B1 / B2 / C1**. `/level B1` and `/level ALL` also work. The persisted level applies to the **shared part** of future `/learn` and `/review` sessions. GENERAL selects only shared words of that level, PERSONAL ignores the CEFR preference (private user entries are not assigned a level), and MIXED combines all private words with level-filtered shared words. Existing sessions preserve the stored level snapshot and are never changed in place by settings. Default: **Все уровни**, matching old behavior. English examples appear underneath shared vocabulary terms inside the lavender quiz widget; personal recall examples still appear only after Reveal.
+
+**Database migration.** `20261114000000_cefr_vocabulary` adds nullable `CefrLevel` metadata to `Word`, `TelegramUser`, and `StudySession`, and an index for shared-word selection. Existing shared words are temporarily marked B2 to remain available with a filter before the expanded seed runs. No table/column drops and no changes to prior options, progress, attempts or sessions. Shared seed later assigns the chosen level to the ten originals. There is no automatic deployment, schema push, webhook change, or production data access in the source package.
+
+**Seed behavior.** `npm run db:seed` now invokes `seedExpandedVocabulary` through the existing guarded-by-config database script, **but its database target is controlled by `DIRECT_URL` / `DATABASE_URL`**. The seed is additive and repeatable: new rows use a unique `slug/version` and `createMany(... skipDuplicates)`, options are inserted only for previously optionless entries, and historical quiz choices are never overwritten. The old `seedInitialWord(db)` remains available for legacy test fixtures. If a shared word already has a partial set of answer choices, the expanded seed fails closed rather than changing them. Running a migration alone **does not import the 303 words** — run the seed as a separate, intentional action.
+
+**Safe deployment order:**
+
+1. Back up the current production Neon branch. Do not include `.env*` secrets in the source archive.
+2. Use Node 24, run `npm ci` (or `npm install`) and `npm run db:generate`, `npm run typecheck`, `npm run lint`, `npm run test:telegram`, and `npx next build --webpack` locally.
+3. On the dedicated allowlisted `ep-nameless-hall` Neon **test branch**, run `WORDFLOW_DB_TESTS=1 npm run db:test:migrate` and `WORDFLOW_DB_TESTS=1 npm run test:db`. The Task #7 integration suite runs after legacy suites and validates the expanded seed and level selection without using a production connection. Expect the expanded seed to add rows to the test branch, persisting across runs.
+4. Review migration SQL and `prisma/seed.ts`. With **explicitly selected production database credentials** and webhook delivery safely paused/drained, apply `npm run db:migrate`, then `npm run db:seed` (verify connection target before either command). Never run `migrate reset` or `db push` against production.
+5. Deploy the reviewed app through the normal GitHub/Vercel release process, resume Telegram webhook, check `/start`, `/level`, GENERAL/PERSONAL/MIXED `/learn`, `/review` and previously issued quiz widgets. Keep the new nullable columns and seeded rows when rolling back the app. Prefer a forward fix rather than dropping schema used by active sessions.
+
+**Limitations:** No generated pronunciation audio/IPA (requires a vetted pronunciation dataset/service and separate UX work). No claim of formal CEFR accreditation or infallible disambiguation of every translation. Existing old widgets do not retroactively gain example sentences. Multi-sense words may need editorial refinement based on learner feedback.
+
 ## Commands and sessions
 
 - `/learn`: selects up to 10 distinct words the user has never answered or revealed. Due reviews are **not** mixed in. New word order is randomized and stored in PostgreSQL.
@@ -82,7 +102,7 @@ Correct attempts preserve the lapse count. MASTERED words continue to be schedul
 
 ## Database model and compatibility
 
-`TelegramUser`, immutable/versioned `Word`, `WordOption`, `StudySession`, `SessionItem`, `ReviewAttempt`, `WidgetQueryReceipt`, and `LearnRequest` remain in place. The active idempotent seed contains 10 words, including the original Reluctant record. A separate 50-word catalog exists in `prisma/vocabulary.ts` but is not used by the current seed; this task leaves vocabulary unchanged. Rerunning it preserves existing IDs, content, attempts, and progress. Published words should not be edited in place.
+`TelegramUser`, immutable/versioned `Word`, `WordOption`, `StudySession`, `SessionItem`, `ReviewAttempt`, `WidgetQueryReceipt`, and `LearnRequest` remain in place. The original ten-word seed remains available for legacy integration fixtures; the runtime seed now expands the shared catalog to 303 entries (Task #7). The existing 50-word list in `prisma/vocabulary.ts` is now used by the expanded seed. Rerunning it preserves existing IDs, content, attempts, and progress. Published words should not be edited in place.
 
 Migration **`20261112000000_spaced_repetition`** adds:
 

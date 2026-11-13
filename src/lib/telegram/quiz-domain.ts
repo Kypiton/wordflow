@@ -1,4 +1,4 @@
-export type QuizContent = { term: string; partOfSpeech: string; options: string[]; kind?: "self" };
+export type QuizContent = { term: string; partOfSpeech: string; options: string[]; kind?: "self"; example?: string };
 
 export type SessionMode = "LEARN" | "REVIEW";
 

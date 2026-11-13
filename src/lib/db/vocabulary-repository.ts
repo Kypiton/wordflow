@@ -2,13 +2,13 @@ import "server-only";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { PrismaClient, Prisma } from "../../generated/prisma/client";
 import { getDatabase } from "./prisma";
-import { button, MODE_LABELS, STATE_LABELS, SAVED_ACTIONS, EMPTY_ACTIONS, modePicker, MENU_TEXT, MENU_ACTIONS, validCallbackData } from "../telegram/navigation";
+import { button, MODE_LABELS, STATE_LABELS, SAVED_ACTIONS, EMPTY_ACTIONS, modePicker, levelPicker, LEVEL_LABELS, MENU_TEXT, MENU_ACTIONS, validCallbackData } from "../telegram/navigation";
 import { isPositiveId, isQueryId } from "../telegram/types";
 import { VocabularyInputError, confirmation, englishTerm, optionalField, russianTranslation, splitEntry, vocabularyCommand } from "../vocabulary/domain";
 import type { DraftData, VocabularyMode, VocabularyResponse } from "../vocabulary/domain";
-  
+
 export class VocabularyRepository {
-  constructor(private database: () => PrismaClient = getDatabase) {}
+  constructor(private database: () => PrismaClient = getDatabase) { }
   async bindPrompt(userId: number, token: string, messageId: number): Promise<void> {
     if (!isPositiveId(userId) || !isPositiveId(messageId) || !/^[a-f0-9]{24}$/.test(token)) throw new Error("Invalid prompt.");
     await this.database().vocabularyDraft.updateMany({ where: { userId: BigInt(userId), token }, data: { promptMessageId: BigInt(messageId) } });
@@ -25,8 +25,10 @@ export class VocabularyRepository {
     const callback = callbackId ? text.split(":").slice(1) : null;
     if (callback) {
       const [action, arg, page] = callback;
-      command = { name: ({ save: "confirm", settings: "mode", learn: "mode", list: "mywords", archive: "delete" } as Record<string, string>)[action] ?? action,
-        args: action === "list" ? `${arg === "x" ? "archived " : ""}${page}` : arg ?? "" };
+      command = {
+        name: ({ save: "confirm", settings: "mode", learn: "mode", list: "mywords", archive: "delete" } as Record<string, string>)[action] ?? action,
+        args: action === "list" ? `${arg === "x" ? "archived " : ""}${page}` : arg ?? ""
+      };
     }
     const receipt = callbackId ? callbackReceiptKey(callbackId) : BigInt(messageId);
     if (!command && !replyTo) return null;
@@ -51,8 +53,10 @@ export class VocabularyRepository {
       const saveDraft = async (data: DraftData) => {
         data = JSON.parse(JSON.stringify(data)) as DraftData;
         const token = randomBytes(12).toString("hex");
-        await tx.vocabularyDraft.upsert({ where: { userId: user }, create: { userId: user, token, data: data as Prisma.InputJsonValue, expiresAt: new Date(clock.now.getTime() + 600_000) },
-          update: { token, data: data as Prisma.InputJsonValue, promptMessageId: null, expiresAt: new Date(clock.now.getTime() + 600_000) } });
+        await tx.vocabularyDraft.upsert({
+          where: { userId: user }, create: { userId: user, token, data: data as Prisma.InputJsonValue, expiresAt: new Date(clock.now.getTime() + 600_000) },
+          update: { token, data: data as Prisma.InputJsonValue, promptMessageId: null, expiresAt: new Date(clock.now.getTime() + 600_000) }
+        });
         const awaiting = data.awaiting ?? (!data.translation && ["add", "edit"].includes(data.kind) ? "translation" : undefined);
         if (!awaiting) return confirmation(data, token);
         const prompts = { term: "Какое английское слово или выражение добавить?", translation: `Как перевести «${data.term}» на русский?`, pos: `Укажите часть речи для «${data.term}». «-» очищает поле.`, example: `Напишите пример для «${data.term}». «-» очищает поле.` };
@@ -60,23 +64,29 @@ export class VocabularyRepository {
 
       };
       const listResponse = async (args: string): Promise<VocabularyResponse> => {
-          const match = /^(?:(archived)(?:\s+|$))?([1-9][0-9]{0,2})?$/.exec(args.trim());
-          if (!match) return { text: "Формат: /mywords 1 или /mywords archived 1." };
-          const page = Number(match[2] ?? 1), archived = Boolean(match[1]);
-          const total = await tx.personalWord.count({ where: { ownerId: user } });
-          const where = { ownerId: user, archivedAt: archived ? { not: null } : null };
-          const count = await tx.personalWord.count({ where });
-          const pages = Math.max(1, Math.ceil(count / 5));
-          if (page > pages) return { text: `Такой страницы нет. Страниц: ${pages}.` };
-          const words = await tx.personalWord.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * 5, take: 5,
-            include: { versions: { where: { isCurrent: true }, include: { progress: { where: { userId: user } } } } } });
-          const rows = words.map(entry => { const word = entry.versions[0]; return `${word.term} — ${word.translation}${word.partOfSpeech ? ` (${word.partOfSpeech})` : ""}\n${STATE_LABELS[word.progress[0]?.state ?? "NEW"]}`; });
-          const active = await tx.personalWord.count({ where: { ownerId: user, archivedAt: null } });
-          return { text: `Мои слова: ${total} всего · активных: ${active}\n${archived ? "Архив · " : ""}Страница ${page}/${pages}\n\n${rows.join("\n\n") || "Здесь пока пусто. Добавьте первое слово."}`, keyboard: { inline_keyboard: [
-            ...words.map(entry => [button(entry.versions[0].term.slice(0, 40), `word:${entry.id}`)]),
-            [...(page > 1 ? [button("◀️", `list:${archived ? "x" : "a"}:${page - 1}`)] : []), ...(page < pages ? [button("▶️", `list:${archived ? "x" : "a"}:${page + 1}`)] : [])],
-            [button(archived ? "Активные" : "Архив", `list:${archived ? "a" : "x"}:1`), button("➕ Добавить", "add")], [button("Главное меню", "menu")],
-          ].filter(row => row.length) } };
+        const match = /^(?:(archived)(?:\s+|$))?([1-9][0-9]{0,2})?$/.exec(args.trim());
+        if (!match) return { text: "Формат: /mywords 1 или /mywords archived 1." };
+        const page = Number(match[2] ?? 1), archived = Boolean(match[1]);
+        const total = await tx.personalWord.count({ where: { ownerId: user } });
+        const where = { ownerId: user, archivedAt: archived ? { not: null } : null };
+        const count = await tx.personalWord.count({ where });
+        const pages = Math.max(1, Math.ceil(count / 5));
+        if (page > pages) return { text: `Такой страницы нет. Страниц: ${pages}.` };
+        const words = await tx.personalWord.findMany({
+          where, orderBy: [{ createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * 5, take: 5,
+          include: { versions: { where: { isCurrent: true }, include: { progress: { where: { userId: user } } } } }
+        });
+        const rows = words.map(entry => { const word = entry.versions[0]; return `${word.term} — ${word.translation}${word.partOfSpeech ? ` (${word.partOfSpeech})` : ""}\n${STATE_LABELS[word.progress[0]?.state ?? "NEW"]}`; });
+        const active = await tx.personalWord.count({ where: { ownerId: user, archivedAt: null } });
+        return {
+          text: `Мои слова: ${total} всего · активных: ${active}\n${archived ? "Архив · " : ""}Страница ${page}/${pages}\n\n${rows.join("\n\n") || "Здесь пока пусто. Добавьте первое слово."}`, keyboard: {
+            inline_keyboard: [
+              ...words.map(entry => [button(entry.versions[0].term.slice(0, 40), `word:${entry.id}`)]),
+              [...(page > 1 ? [button("◀️", `list:${archived ? "x" : "a"}:${page - 1}`)] : []), ...(page < pages ? [button("▶️", `list:${archived ? "x" : "a"}:${page + 1}`)] : [])],
+              [button(archived ? "Активные" : "Архив", `list:${archived ? "a" : "x"}:1`), button("➕ Добавить", "add")], [button("Главное меню", "menu")],
+            ].filter(row => row.length)
+          }
+        };
 
       };
       const run = async (): Promise<VocabularyResponse> => {
@@ -87,15 +97,21 @@ export class VocabularyRepository {
           const entry = await tx.personalWord.findFirst({ where: { id: callback[1], ownerId: user }, include: { versions: { where: { isCurrent: true }, include: { progress: { where: { userId: user } } } } } });
           const word = entry?.versions[0];
           if (!entry || !word) return { text: "Слово недоступно. Обновите список.", keyboard: SAVED_ACTIONS };
-          if (callback[0] === "word") return { text: `${word.term} — ${word.translation}\n${word.partOfSpeech ? `Часть речи: ${word.partOfSpeech}\n` : ""}${word.example ? `Пример: ${word.example}\n` : ""}Статус: ${entry.archivedAt ? "В архиве" : STATE_LABELS[word.progress[0]?.state ?? "NEW"]}`,
-            keyboard: { inline_keyboard: [
-              ...(entry.archivedAt ? [] : [[button("✏️ Перевод", `edit:${entry.id}`)], [button("Пример", `example:${entry.id}`), button("Часть речи", `pos:${entry.id}`)]]),
-              [button(entry.archivedAt ? "♻️ Восстановить" : "🗃 Архивировать", `${entry.archivedAt ? "restore" : "archive"}:${entry.id}`)],
-              [button("◀️ Назад", `list:${entry.archivedAt ? "x" : "a"}:1`), button("Главное меню", "menu")]] } };
+          if (callback[0] === "word") return {
+            text: `${word.term} — ${word.translation}\n${word.partOfSpeech ? `Часть речи: ${word.partOfSpeech}\n` : ""}${word.example ? `Пример: ${word.example}\n` : ""}Статус: ${entry.archivedAt ? "В архиве" : STATE_LABELS[word.progress[0]?.state ?? "NEW"]}`,
+            keyboard: {
+              inline_keyboard: [
+                ...(entry.archivedAt ? [] : [[button("✏️ Перевод", `edit:${entry.id}`)], [button("Пример", `example:${entry.id}`), button("Часть речи", `pos:${entry.id}`)]]),
+                [button(entry.archivedAt ? "♻️ Восстановить" : "🗃 Архивировать", `${entry.archivedAt ? "restore" : "archive"}:${entry.id}`)],
+                [button("◀️ Назад", `list:${entry.archivedAt ? "x" : "a"}:1`), button("Главное меню", "menu")]]
+            }
+          };
           const action = callback[0];
-          return saveDraft({ kind: action === "archive" ? "delete" : action === "restore" ? "restore" : "edit", term: word.term,
+          return saveDraft({
+            kind: action === "archive" ? "delete" : action === "restore" ? "restore" : "edit", term: word.term,
             translation: action === "edit" ? undefined : word.translation!, partOfSpeech: word.partOfSpeech, example: word.example, wordId: entry.id, versionId: word.id,
-            ...(["edit", "pos", "example"].includes(action) ? { awaiting: action === "edit" ? "translation" : action as "pos" | "example" } : {}) });
+            ...(["edit", "pos", "example"].includes(action) ? { awaiting: action === "edit" ? "translation" : action as "pos" | "example" } : {})
+          });
         }
         if (["translation", "confirm", "cancel"].includes(name)) {
           if (!draft || draft.expiresAt <= clock.now) return { text: "Действие истекло или отсутствует. Начните с /add или /edit." };
@@ -139,9 +155,17 @@ export class VocabularyRepository {
           }
           return { text: "Сохранено!", keyboard: SAVED_ACTIONS };
         }
+        if (name === "level") {
+          const chosen = args.trim().toUpperCase();
+          if (!chosen) return { text: `Уровень: ${owner.cefrLevel ? LEVEL_LABELS[owner.cefrLevel] : "Все уровни"}.\nФильтр применяется к общему словарю со следующего занятия. Личные слова остаются доступными.`, keyboard: levelPicker(owner.cefrLevel) };
+          if (!["ALL", "A1", "A2", "B1", "B2", "C1"].includes(chosen)) return { text: "Выберите уровень кнопкой ниже.", keyboard: levelPicker(owner.cefrLevel) };
+          const level = chosen === "ALL" ? null : chosen as keyof typeof LEVEL_LABELS;
+          await tx.telegramUser.update({ where: { id: user }, data: { cefrLevel: level } });
+          return { text: `Уровень: ${level ? LEVEL_LABELS[level] : "Все уровни"}. Изменение действует со следующего занятия; текущая сессия сохраняется.`, keyboard: levelPicker(level) };
+        }
         if (name === "mode" || name === "choose") {
           const mode = args.trim().toUpperCase();
-          if (!mode) return { text: `Словарь: ${MODE_LABELS[owner.vocabularyMode]}.\nВыбор сохраняется для следующих занятий. Активное занятие не меняется.`, keyboard: modePicker(owner.vocabularyMode, name === "choose") };
+          if (!mode) return { text: `Словарь: ${MODE_LABELS[owner.vocabularyMode]}.\nУровень: ${owner.cefrLevel ? LEVEL_LABELS[owner.cefrLevel] : "Все уровни"}.\nВыбор сохраняется для следующих занятий. Активное занятие не меняется.`, keyboard: modePicker(owner.vocabularyMode, name === "choose") };
           if (!["GENERAL", "PERSONAL", "MIXED"].includes(mode)) return { text: "Выберите словарь кнопкой ниже.", keyboard: modePicker(owner.vocabularyMode) };
           await tx.telegramUser.update({ where: { id: user }, data: { vocabularyMode: mode as VocabularyMode } });
           return { text: `Выбран словарь «${MODE_LABELS[mode as VocabularyMode]}». Активное занятие не изменено.`, keyboard: modePicker(mode as VocabularyMode), ...(callback?.[0] === "learn" ? { learn: "LEARN" as const } : {}) };
@@ -173,8 +197,10 @@ export class VocabularyRepository {
         if (!(error instanceof VocabularyInputError)) throw error;
         const pending = draft?.data as DraftData | undefined;
         const awaiting = pending?.awaiting || (pending && !pending.translation && ["add", "edit"].includes(pending.kind));
-        response = { text: error.message, ...(draft && awaiting && (!command || command.name === "translation")
-          ? { promptToken: draft.token, forceReply: true } : {}), keyboard: EMPTY_ACTIONS };
+        response = {
+          text: error.message, ...(draft && awaiting && (!command || command.name === "translation")
+            ? { promptToken: draft.token, forceReply: true } : {}), keyboard: EMPTY_ACTIONS
+        };
       }
       if (!response.keyboard && !response.forceReply) response.keyboard = SAVED_ACTIONS;
       await tx.vocabularyReceipt.create({ data: { userId: user, messageId: receipt, fingerprint, response: response as Prisma.InputJsonValue } });

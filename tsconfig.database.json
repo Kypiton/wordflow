@@ -4,5 +4,5 @@
     "strict": true, "esModuleInterop": true, "skipLibCheck": true,
     "rootDir": ".", "outDir": ".next/database-tools"
   },
-  "include": ["prisma/seed.ts", "src/lib/db/**/*.ts"]
+  "include": ["prisma/seed.ts", "prisma/vocabulary.ts", "prisma/vocabulary-expanded.ts", "prisma/vocabulary-legacy.ts", "src/lib/db/**/*.ts"]
 }

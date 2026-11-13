@@ -50,6 +50,7 @@ export async function registerWebhook(env = process.env) {
         { command: "add", description: "Добавить своё слово" },
         { command: "mywords", description: "Мой словарь" },
         { command: "mode", description: "Выбрать словарь" },
+        { command: "level", description: "Выбрать уровень A1–C1" },
         { command: "help", description: "Как пользоваться ботом" },
       ] }),
     });

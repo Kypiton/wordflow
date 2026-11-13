@@ -4,7 +4,7 @@ export class VocabularyInputError extends Error {}
 export type VocabularyMode = "GENERAL" | "PERSONAL" | "MIXED";
 export type DraftData = { kind: "add" | "edit" | "delete" | "restore"; term: string; awaiting?: "term" | "translation" | "pos" | "example"; translation?: string; partOfSpeech: string; example: string | null; wordId?: string; versionId?: string };
 export type VocabularyResponse = { text: string; promptToken?: string; keyboard?: InlineKeyboardMarkup; forceReply?: boolean; learn?: "LEARN" | "REVIEW"; deliveredMessageId?: number; replayed?: boolean };
-const commands = new Set(["add", "translation", "confirm", "cancel", "mywords", "edit", "example", "pos", "delete", "restore", "mode", "choose"]);
+const commands = new Set(["add", "translation", "confirm", "cancel", "mywords", "edit", "example", "pos", "delete", "restore", "mode", "choose", "level"]);
 export function vocabularyCommand(text: string): { name: string; args: string } | null {
   const match = /^\/([a-z]+)(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/.exec(text.trim());
   return match && commands.has(match[1]) ? { name: match[1], args: match[2] ?? "" } : null;
